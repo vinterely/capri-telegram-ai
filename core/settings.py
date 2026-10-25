@@ -87,9 +87,36 @@ def set_gemini_voice(voice: str) -> None:
     save(gemini_voice=voice)
 
 
+def get_jarvis_voice() -> str:
+    """دریافت شماره یا نام گوینده ربات جارویس (پیش‌فرض: 1 / باران)."""
+    return str(load().get("jarvis_voice", "1"))
+
+
+def set_jarvis_voice(voice: str) -> None:
+    """تنظیم گوینده ربات جارویس."""
+    save(jarvis_voice=str(voice))
+
+
+def get_jarvis_tone() -> str:
+    """دریافت شماره یا نام لحن ربات جارویس (پیش‌فرض: 1 / طبیعی)."""
+    return str(load().get("jarvis_tone", "1"))
+
+
+def set_jarvis_tone(tone: str) -> None:
+    """تنظیم لحن ربات جارویس."""
+    save(jarvis_tone=str(tone))
+
+
 def get_voice_speaker() -> str:
     """دریافت نام فارسی گوینده فعال برای داشبورد و آمار سیستم."""
     engine = get_tts_engine()
+    if engine == "jarvis":
+        vid = get_jarvis_voice()
+        tid = get_jarvis_tone()
+        from services.voice import jarvis_bot
+        v_info = jarvis_bot.VOICES.get(str(vid), jarvis_bot.VOICES["1"])
+        t_info = jarvis_bot.TONES.get(str(tid), jarvis_bot.TONES["1"])
+        return f"ربات جارویس ({v_info['name']} - لحن {t_info['name']})"
     if engine == "gemini":
         gv = get_gemini_voice()
         info = GEMINI_VOICES.get(gv, {})

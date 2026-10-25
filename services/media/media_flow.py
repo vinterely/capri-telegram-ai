@@ -228,6 +228,33 @@ async def search_smart_media_links(client, title: str, req: Dict[str, Any]) -> D
     target_ep = req.get("episode")
     parsed_posts = []
 
+    # بررسی فایل‌های مستقیم سندی و ویدیویی در کانال‌ها
+    direct_channel_files = []
+    for m in res.messages:
+        if m.out:
+            continue
+        if isinstance(getattr(m, "media", None), types.MessageMediaDocument):
+            doc = getattr(m.media, "document", None)
+            mime = getattr(doc, "mime_type", "") or ""
+            c_text = unicodedata.normalize('NFKD', m.message or "")
+            if "video" in mime or any(ext in c_text.lower() for ext in (".mkv", ".mp4", ".avi", "1080p", "720p", "480p")):
+                direct_channel_files.append(m)
+
+    if direct_channel_files:
+        matched_channel_files = []
+        for df in direct_channel_files:
+            c_txt = unicodedata.normalize('NFKD', df.message or "")
+            f_s = extract_season(c_txt)
+            f_ep = extract_episode(c_txt)
+            if target_season is not None and f_s is not None and f_s != target_season:
+                continue
+            if isinstance(target_ep, int) and isinstance(f_ep, int) and f_ep != target_ep:
+                continue
+            matched_channel_files.append(df)
+
+        if matched_channel_files:
+            return {"kind": "direct_channel_files", "files": matched_channel_files}
+
     for m in res.messages:
         if m.out or not m.message:
             continue
@@ -334,9 +361,8 @@ async def search_smart_media_links(client, title: str, req: Dict[str, Any]) -> D
     return {"kind": "bot_menu", "tokens": generic_tokens}
 
 
-def analyze_menu_buttons(buttons_2d: List[List[Any]]) -> Dict[str, Any]:
+def analyze_menu_buttons(buttons_2d: Optional[List[List[Any]]]) -> Dict[str, Any]:
     """دسته‌بندی هوشمند دکمه‌های پیام ربات تلگرام به فصل‌ها، کیفیت‌ها، صوت و قسمت‌ها."""
-    all_buttons = [b for row in buttons_2d for b in row]
     res: Dict[str, Any] = {
         "seasons": {},       # season_num -> button
         "episodes": {},      # ep_num -> button
@@ -347,6 +373,10 @@ def analyze_menu_buttons(buttons_2d: List[List[Any]]) -> Dict[str, Any]:
         "sponsors": [],      # buttons with invite urls
         "all_valid": []
     }
+    if not buttons_2d:
+        return res
+
+    all_buttons = [b for row in buttons_2d for b in row]
 
     for b in all_buttons:
         txt = (b.text or "").strip()
@@ -512,18 +542,27 @@ async def start_and_inspect_bot(client, bot_name: str, token: str, joined_list) 
             fetch.mark_paid_bot(bot_name)
             return None, "subscription"
 
-    menu_msg = next((m for m in msgs if not m.out and m.buttons and m.id > sent.id), None)
+    candidates = [m for m in msgs if not m.out and m.id > sent.id]
+    if not candidates:
+        candidates = [m for m in msgs if not m.out]
+
+    # ۱. بررسی آیا فایلی مستقیماً بدون دکمه فرستاده شده؟
+    file_msg = next((m for m in candidates if isinstance(m.media, types.MessageMediaDocument)), None)
+    if file_msg:
+        return file_msg, None
+
+    # ۲. پیام دارای دکمه‌های شیشه‌ای
+    menu_msg = next((m for m in candidates if m.buttons), None)
+
+    # ۳. پیام متنی بدون دکمه (دستورات اسلش، لینک‌های دانلود یا کدهای متنی)
     if not menu_msg:
-        menu_msg = next((m for m in msgs if not m.out and m.buttons), None)
+        menu_msg = next((m for m in candidates if (m.message and len(m.message.strip()) > 1)), None)
 
     if not menu_msg:
-        # بررسی آیا فایل بدون دکمه فرستاده شده؟
-        file_msg = next((m for m in msgs if not m.out and isinstance(m.media, types.MessageMediaDocument)), None)
-        if file_msg:
-            return file_msg, None
-        return None, "ربات پاسخی به همراه دکمه ارسال نکرد."
+        return None, "ربات پاسخی ارسال نکرد."
 
-    menu_msg, _ = await _handle_sponsors(client, bot, menu_msg, joined_list)
+    if menu_msg.buttons:
+        menu_msg, _ = await _handle_sponsors(client, bot, menu_msg, joined_list)
     return menu_msg, None
 
 
@@ -555,9 +594,12 @@ async def collect_documents(client, bot_entity, base_id: int, timeout: float = 1
 
 async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str, Any], event=None, status=None) -> Tuple[List[Any], Optional[str]]:
     """
-    ناوبری هوشمند دکمه‌های شیشه‌ای ربات دانلود با هوش مصنوعی (و فال‌بک الگوها):
-    انتخاب مرحله به مرحله (شروع -> فصل -> صوت -> کیفیت -> قسمت‌ها -> ورق‌زدن خودکار)
-    و فوروارد درجا به محض رسیدن هر قسمت به چت کاربر.
+    ناوبری هوشمند ۰ تا ۱۰۰ ربات‌های تلگرام با کنترل خودمختار هوش مصنوعی:
+    - ناوبری هوشمند دکمه‌های شیشه‌ای بدون لوپ و عقبگرد
+    - ارسال فرامین متنی (/dl_...) یا کدهای دانلود در صورت عدم وجود دکمه شیشه‌ای
+    - دنبال کردن لینک‌ها و توکن‌های دانلود متنی
+    - فیلتر اکید دکمه‌های بازگشت و چرخه‌های تکرار (Anti-Loop Circuit Breaker)
+    - فوروارد درجا به محض رسیدن هر قسمت به چت کاربر
     """
     try:
         bot = await client.get_entity(bot_name)
@@ -568,9 +610,13 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
     base_id = start_msg.id if start_msg else 0
     all_collected = []
     seen_doc_ids = set()
-    clicked_data = set()
-    recent_clicked = []
-    last_action_text = "شروع تعامل"
+    clicked_actions = set()
+    action_history = []
+    recent_actions = []
+
+    target_ep = req.get("episode")
+    target_audio = req.get("audio")
+    target_q = req.get("quality")
 
     async def forward_now(doc_msg):
         if event and getattr(event, "chat_id", None) and doc_msg.id not in seen_doc_ids:
@@ -588,38 +634,53 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
     if direct_docs:
         for d in direct_docs:
             await forward_now(d)
-        return all_collected, None
+        if isinstance(target_ep, int) or (req.get("season") is None and target_ep is None):
+            return all_collected, None
 
-    for step in range(14):
+    for step in range(15):
         # بررسی و فوروارد هر فایلی که در میان‌مرحله رسیده است
         interim_docs = await collect_documents(client, bot, base_id, timeout=1.5)
         for d in interim_docs:
             await forward_now(d)
 
-        # اگر کاربر یک قسمت مشخص خواسته بود و همان قسمت رسید، اتمام
-        target_ep = req.get("episode")
-        if isinstance(target_ep, int) and len(all_collected) >= 1:
+        # اگر کاربر یک قسمت مشخص خواسته بود یا فیلم تک‌قسمتی بود و فایل رسید، اتمام
+        if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)) and len(all_collected) >= 1:
             return all_collected, None
 
-        if not cur_msg or not cur_msg.buttons:
+        # به‌روزرسانی پیام اخیر ربات (پشتیبانی از هر دو نوع پیام: دکمه‌دار یا متن ساده)
+        msgs = await client.get_messages(bot, limit=8)
+        non_out = [m for m in msgs if not m.out]
+        candidates = [m for m in non_out if m.id > base_id] if any(m.id > base_id for m in non_out) else non_out
+
+        file_msg = next((m for m in candidates if isinstance(m.media, types.MessageMediaDocument)), None)
+        if file_msg:
+            await forward_now(file_msg)
+            if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)):
+                return all_collected, None
+
+        new_cur = next((m for m in candidates if m.buttons or (m.message and len(m.message.strip()) > 1)), None)
+        if new_cur:
+            cur_msg = new_cur
+
+        if not cur_msg:
             await asyncio.sleep(2.0)
             msgs = await client.get_messages(bot, limit=5)
-            cur_msg = next((m for m in msgs if not m.out and m.buttons), None)
+            cur_msg = next((m for m in msgs if not m.out and (m.buttons or m.message)), None)
             if not cur_msg:
                 break
 
         # رسیدگی خودکار به اسپانسرها و قفل‌های عضویت
-        analysis = analyze_menu_buttons(cur_msg.buttons)
-        if analysis["sponsors"]:
-            for sb in analysis["sponsors"]:
-                ch = await fetch._join(client, sb.url)
-                await asyncio.sleep(1.0)
-            if analysis["confirm"]:
-                await cur_msg.click(data=analysis["confirm"].data)
-                await asyncio.sleep(2.5)
-                msgs = await client.get_messages(bot, limit=5)
-                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-                continue
+        if cur_msg.buttons:
+            analysis = analyze_menu_buttons(cur_msg.buttons)
+            if analysis["sponsors"]:
+                for sb in analysis["sponsors"]:
+                    await fetch._join(client, sb.url)
+                    await asyncio.sleep(1.0)
+                if analysis["confirm"]:
+                    await cur_msg.click(data=analysis["confirm"].data)
+                    action_history.append("تایید عضویت در کانال‌های اسپانسر")
+                    await asyncio.sleep(2.5)
+                    continue
 
         # بررسی ربات‌های ورق‌زن استاندارد (آیتم X/Y و دکمه دریافت و بعدی)
         cur_text = normalize_digits(cur_msg.message or '')
@@ -689,143 +750,206 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                         break
             return all_collected, None
 
-        # ۱. اولویت اول: تطابق صریح و هوشمند بر اساس درخواست کاربر (فصل، صوت، کیفیت و دانلود)
-        best_b = match_preferred_button(cur_msg.buttons, req)
-        if best_b and getattr(best_b, "data", None) and best_b.data not in clicked_data:
-            btn_txt = (best_b.text or "").strip()
-            last_action_text = f"انتخاب «{btn_txt}»"
-            if status:
-                try:
-                    await status.edit(f"🎬 در حال انتخاب «{btn_txt}»...")
-                except Exception:
-                    pass
-            await cur_msg.click(data=best_b.data)
-            clicked_data.add(best_b.data)
-            recent_clicked.append(best_b.data)
-            await asyncio.sleep(2.5)
+        # کنترل خودمختار هوش مصنوعی ۰ تا ۱۰۰
+        nav_state = {
+            "files_count": len(all_collected),
+            "history": action_history,
+            "step": step + 1
+        }
+        decision = await ai_nav.ai_decide_action([cur_msg], req, nav_state)
+        action_type = decision.get("action")
+        reason = decision.get("reason", "")
 
-            docs_after = await collect_documents(client, bot, cur_msg.id, timeout=4.0)
-            for d in docs_after:
+        if action_type == "done":
+            docs_last = await collect_documents(client, bot, base_id, timeout=3.0)
+            for d in docs_last:
                 await forward_now(d)
+            return all_collected, None
 
-            if isinstance(target_ep, int) and len(all_collected) >= 1:
-                return all_collected, None
+        elif action_type == "give_up":
+            return all_collected, reason or "عدم دسترسی به فایل"
 
-            msgs = await client.get_messages(bot, limit=5)
-            new_act = next((m for m in msgs if not m.out and m.buttons and m.id > cur_msg.id), None)
-            if new_act:
-                cur_msg = new_act
+        elif action_type == "send_text":
+            cmd = (decision.get("text") or "").strip()
+            act_sig = ("send_text", cmd)
+            if act_sig in clicked_actions:
+                log.warning("Loop prevention: text command %s already sent. Skipping repeat.", cmd)
             else:
-                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-            continue
-
-        # ۲. ناوبری دکمه‌ها با هوش مصنوعی (فیلتر اکید دکمه‌های برگشت/عقبگرد)
-        all_row_btns = [b for row in (cur_msg.buttons or []) for b in row if getattr(b, "data", None)]
-        non_back_btns = [b for b in all_row_btns if not ai_nav.is_back_button(getattr(b, "text", "") or "")]
-        pool = non_back_btns if non_back_btns else all_row_btns
-        clickable = [b for b in pool if b.data not in clicked_data]
-        if not clickable:
-            clickable = pool
-
-        if clickable:
-            state = {
-                "files_count": len(all_collected),
-                "last_action": last_action_text,
-                "step": step + 1
-            }
-            ai_idx = await ai_nav.ai_pick_button(clickable, cur_msg.message or "", req, state)
-            if ai_idx is not None and 0 <= ai_idx < len(clickable):
-                chosen_b = clickable[ai_idx]
-                btn_txt = (chosen_b.text or "").strip()
-                last_action_text = f"انتخاب «{btn_txt}»"
                 if status:
                     try:
-                        await status.edit(f"🎬 [هوش مصنوعی] در حال انتخاب «{btn_txt}»...")
+                        await status.edit(f"🤖 [هوش مصنوعی] ارسال دستور به ربات: {cmd}...")
                     except Exception:
                         pass
-                await cur_msg.click(data=chosen_b.data)
-                clicked_data.add(chosen_b.data)
-                recent_clicked.append(chosen_b.data)
+                await client.send_message(bot, cmd)
+                clicked_actions.add(act_sig)
+                action_history.append(f"ارسال دستور «{cmd}» ({reason})")
+                recent_actions.append(act_sig)
                 await asyncio.sleep(2.5)
 
-                # دریافت و فوروارد فایل‌هایی که احیاناً بعد از کلیک فرستاده شدند
+                docs_after = await collect_documents(client, bot, cur_msg.id, timeout=5.0)
+                for d in docs_after:
+                    await forward_now(d)
+
+                if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)) and len(all_collected) >= 1:
+                    return all_collected, None
+                continue
+
+        elif action_type == "follow_link":
+            url = (decision.get("url") or "").strip()
+            act_sig = ("follow_link", url)
+            if act_sig not in clicked_actions:
+                clicked_actions.add(act_sig)
+                action_history.append(f"دنبال کردن لینک «{url}» ({reason})")
+                recent_actions.append(act_sig)
+                m_start = fetch.BOT_START_RE.search(url)
+                if m_start:
+                    sub_bot, sub_tok = m_start.group(1), m_start.group(2)
+                    sub_files, _ = await fetch.follow_bot(
+                        client, sub_bot, sub_tok, [],
+                        quality=target_q, audio=target_audio,
+                        season=req.get("season"), episode=target_ep,
+                        event=event, status=status
+                    )
+                    if sub_files:
+                        for sf in sub_files:
+                            await forward_now(sf)
+                        return all_collected, None
+            continue
+
+        elif action_type == "click_button" and decision.get("button"):
+            btn_dict = decision["button"]
+            b_data = btn_dict.get("data")
+            b_text = btn_dict.get("text", "")
+            act_sig = ("click_button", b_text, b_data)
+
+            if act_sig in clicked_actions:
+                log.warning("Loop prevention: button %s already clicked in this flow.", b_text)
+            else:
+                if status:
+                    try:
+                        await status.edit(f"🎬 [هوش مصنوعی] انتخاب «{b_text}»...")
+                    except Exception:
+                        pass
+                await cur_msg.click(data=b_data)
+                clicked_actions.add(act_sig)
+                action_history.append(f"انتخاب دکمه «{b_text}» ({reason})")
+                recent_actions.append(act_sig)
+                await asyncio.sleep(2.5)
+
                 docs_after = await collect_documents(client, bot, cur_msg.id, timeout=4.0)
                 for d in docs_after:
                     await forward_now(d)
 
-                if isinstance(target_ep, int) and len(all_collected) >= 1:
+                if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)) and len(all_collected) >= 1:
+                    return all_collected, None
+                continue
+
+        # فال‌بک تطابق دکمه در صورت عدم انتخاب مشخص توسط هوش مصنوعی
+        if cur_msg.buttons:
+            best_b = match_preferred_button(cur_msg.buttons, req)
+            if best_b and getattr(best_b, "data", None):
+                b_text = (best_b.text or "").strip()
+                act_sig = ("click_button", b_text, best_b.data)
+                if act_sig not in clicked_actions:
+                    if status:
+                        try:
+                            await status.edit(f"🎬 انتخاب «{b_text}»...")
+                        except Exception:
+                            pass
+                    await cur_msg.click(data=best_b.data)
+                    clicked_actions.add(act_sig)
+                    action_history.append(f"انتخاب «{b_text}»")
+                    recent_actions.append(act_sig)
+                    await asyncio.sleep(2.5)
+
+                    docs_after = await collect_documents(client, bot, cur_msg.id, timeout=4.0)
+                    for d in docs_after:
+                        await forward_now(d)
+                    if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)) and len(all_collected) >= 1:
+                        return all_collected, None
+                    continue
+
+        # فال‌بک ساختاری امن: انتخاب فصل، کیفیت و صوت با احترام قطعی به اولویت کاربر (بدون انتخاب صوت متضاد)
+        if cur_msg.buttons:
+            analysis = analyze_menu_buttons(cur_msg.buttons)
+
+            # ۱. انتخاب فصل
+            if analysis["seasons"]:
+                raw_s = req.get("season")
+                target_season = int(raw_s) if raw_s is not None else None
+                s_btn = analysis["seasons"].get(target_season) if target_season else analysis["seasons"][sorted(analysis["seasons"].keys())[0]]
+                if s_btn and s_btn.data and ("click_button", s_btn.text, s_btn.data) not in clicked_actions and not ai_nav.is_back_button(s_btn.text or ""):
+                    await cur_msg.click(data=s_btn.data)
+                    clicked_actions.add(("click_button", s_btn.text, s_btn.data))
+                    await asyncio.sleep(2.2)
+                    continue
+
+            # ۲. انتخاب صوت (اکیداً بدون انتخاب صوت مخالف)
+            if analysis["audio"]:
+                chosen_a_btn = None
+                if target_audio:
+                    chosen_a_btn = analysis["audio"].get(target_audio)
+                else:
+                    chosen_a_btn = analysis["audio"].get("subtitled") or next(iter(analysis["audio"].values()), None)
+
+                if chosen_a_btn and chosen_a_btn.data and ("click_button", chosen_a_btn.text, chosen_a_btn.data) not in clicked_actions and not ai_nav.is_back_button(chosen_a_btn.text or ""):
+                    await cur_msg.click(data=chosen_a_btn.data)
+                    clicked_actions.add(("click_button", chosen_a_btn.text, chosen_a_btn.data))
+                    await asyncio.sleep(2.2)
+                    continue
+
+            # ۳. انتخاب کیفیت
+            if analysis["qualities"]:
+                target_q_val = target_q or 480
+                q_btn = analysis["qualities"].get(target_q_val)
+                if not q_btn:
+                    avail_qs = sorted(analysis["qualities"].keys())
+                    q_btn = analysis["qualities"][min(avail_qs, key=lambda x: abs(x - target_q_val))]
+                if q_btn and q_btn.data and ("click_button", q_btn.text, q_btn.data) not in clicked_actions and not ai_nav.is_back_button(q_btn.text or ""):
+                    await cur_msg.click(data=q_btn.data)
+                    clicked_actions.add(("click_button", q_btn.text, q_btn.data))
+                    await asyncio.sleep(2.2)
+                    continue
+
+            # ۴. دکمه مستقیم دانلود
+            dl_b = next((b for b in analysis["all_valid"] if b.data and ("click_button", b.text, b.data) not in clicked_actions and not ai_nav.is_back_button(b.text or "") and any(h in (b.text or "").lower() for h in fetch.DOWNLOAD_HINTS)), None)
+            if dl_b:
+                await cur_msg.click(data=dl_b.data)
+                clicked_actions.add(("click_button", dl_b.text, dl_b.data))
+                docs = await collect_documents(client, bot, cur_msg.id, timeout=8.0)
+                for d in docs:
+                    await forward_now(d)
+                if all_collected:
                     return all_collected, None
 
-                # تشخیص حلقه و تکرار
-                if len(recent_clicked) >= 4 and recent_clicked[-1] == recent_clicked[-3] and recent_clicked[-2] == recent_clicked[-4]:
-                    log.warning("Loop cycle detected in bot navigation; exiting loop.")
-                    break
+        # ۵. فال‌بک دستورات اسلش یا متنی در پیام جاری
+        if cur_msg.message:
+            m_elems = ai_nav.extract_message_elements(cur_msg)
+            if m_elems.get("commands"):
+                best_cmd = ai_nav.match_best_command(cur_msg.message, m_elems["commands"], req)
+                if best_cmd and ("send_text", best_cmd) not in clicked_actions:
+                    if status:
+                        try:
+                            await status.edit(f"🤖 ارسال دستور دانلود: {best_cmd}...")
+                        except Exception:
+                            pass
+                    await client.send_message(bot, best_cmd)
+                    clicked_actions.add(("send_text", best_cmd))
+                    recent_actions.append(("send_text", best_cmd))
+                    await asyncio.sleep(2.5)
+                    docs = await collect_documents(client, bot, cur_msg.id, timeout=6.0)
+                    for d in docs:
+                        await forward_now(d)
+                    if (isinstance(target_ep, int) or (req.get("season") is None and target_ep is None)) and len(all_collected) >= 1:
+                        return all_collected, None
+                    continue
 
-                msgs = await client.get_messages(bot, limit=5)
-                new_act = next((m for m in msgs if not m.out and m.buttons and m.id > cur_msg.id), None)
-                if new_act:
-                    cur_msg = new_act
-                else:
-                    cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-                continue
+        # تشخیص حلقه تکراری
+        if len(recent_actions) >= 4 and recent_actions[-1] == recent_actions[-3] and recent_actions[-2] == recent_actions[-4]:
+            log.warning("Loop cycle detected in bot navigation; breaking circuit.")
+            break
 
-            elif ai_idx is None and all_collected:
-                # هوش مصنوعی تشخیص داد فرایند تمام شده است
-                return all_collected, None
-
-        # ۳. فال‌بک مبتنی بر قوانین و تحلیل ساختاری در صورت عدم انتخاب توسط هوش مصنوعی
-        # ۱. انتخاب فصل
-        if analysis["seasons"]:
-            raw_s = req.get("season")
-            target_season = int(raw_s) if raw_s is not None else None
-            btn = analysis["seasons"].get(target_season) if target_season else analysis["seasons"][sorted(analysis["seasons"].keys())[0]]
-            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
-                await cur_msg.click(data=btn.data)
-                clicked_data.add(btn.data)
-                await asyncio.sleep(2.2)
-                msgs = await client.get_messages(bot, limit=5)
-                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-                continue
-
-        # ۲. انتخاب صوت
-        if analysis["audio"]:
-            target_audio = req.get("audio") or "subtitled"
-            btn = analysis["audio"].get(target_audio) or next(iter(analysis["audio"].values()), None)
-            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
-                await cur_msg.click(data=btn.data)
-                clicked_data.add(btn.data)
-                await asyncio.sleep(2.2)
-                msgs = await client.get_messages(bot, limit=5)
-                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-                continue
-
-        # ۳. انتخاب کیفیت
-        if analysis["qualities"]:
-            target_q = req.get("quality") or 480
-            btn = analysis["qualities"].get(target_q)
-            if not btn:
-                avail = sorted(analysis["qualities"].keys())
-                btn = analysis["qualities"][min(avail, key=lambda x: abs(x - target_q))]
-            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
-                await cur_msg.click(data=btn.data)
-                clicked_data.add(btn.data)
-                await asyncio.sleep(2.2)
-                msgs = await client.get_messages(bot, limit=5)
-                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
-                continue
-
-        # ۴. دکمه مستقیم دانلود
-        dl_b = next((b for b in analysis["all_valid"] if b.data not in clicked_data and not ai_nav.is_back_button(b.text or "") and any(h in (b.text or "").lower() for h in fetch.DOWNLOAD_HINTS)), None)
-        if dl_b:
-            await cur_msg.click(data=dl_b.data)
-            clicked_data.add(dl_b.data)
-            docs = await collect_documents(client, bot, cur_msg.id, timeout=8.0)
-            for d in docs:
-                await forward_now(d)
-            if all_collected:
-                return all_collected, None
-
-        break
+        await asyncio.sleep(1.5)
 
     # بررسی نهایی برای فایل‌های تاخیری
     final_docs = await collect_documents(client, bot, base_id, timeout=3.5)
@@ -867,6 +991,23 @@ async def smart_fetch_media(
 
     # ۱. جستجوی ساختاریافته در کانال‌ها
     structured = await search_smart_media_links(client, title, req)
+
+    # حالت صفر: فایل‌های ویدیویی مستقیم در کانال‌ها پیدا شده‌اند (فوروارد فوری بدون نیاز به ربات واسط)
+    if structured.get("kind") == "direct_channel_files" and structured.get("files"):
+        c_files = structured["files"]
+        if status:
+            await status.edit(f"🎬 تعداد {len(c_files)} فایل ویدیویی مستقیم در کانال‌ها پیدا شد! در حال فوروارد...")
+        fwded = []
+        for cf in c_files:
+            try:
+                await client.forward_messages(event.chat_id, cf)
+                fwded.append(cf)
+            except Exception as e:
+                log.warning(f"Error forwarding direct channel file: {e}")
+        if fwded:
+            if status:
+                await status.edit(f"✅ تمام {len(fwded)} فایل با موفقیت فوروارد شد 👆")
+            return True, "ارسال شد."
 
     # حالت الف: لینک‌های مستقیم قسمت‌های فصل در کانال پیدا شده‌اند (حل مشکل اسلو هورس و امثال آن)
     if structured.get("kind") == "direct_tokens" and structured.get("tokens"):

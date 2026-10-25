@@ -62,7 +62,7 @@ def clear_screen():
 def print_banner():
     print("""
 ======================================================================
-  🌟 CAPRI TELEGRAM AI USERBOT [v1.6.0] - LAUNCHER & WIZARD
+  🌟 CAPRI TELEGRAM AI USERBOT [v2.0.0] - LAUNCHER & WIZARD
 ======================================================================
 """)
 

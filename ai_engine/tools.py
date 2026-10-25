@@ -1,7 +1,10 @@
 import asyncio
 import json
+import logging
 import re
 import time
+
+log = logging.getLogger("tools")
 
 from ai_engine import ai
 from services.social import briefing
@@ -256,7 +259,10 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "متن صمیمی و محاوره‌ای برای ویس."}
+                    "text": {
+                        "type": "string",
+                        "description": "متن صمیمی و محاوره‌ای برای ویس که باید همراه با حرکات کامل اعرابی (فتحه َ، کسره ِ، ضمه ُ، تشدید ّ) نوشته شود تا تلفظ دقیق باشد."
+                    }
                 },
                 "required": ["text"]
             }
@@ -470,6 +476,7 @@ def get_all_tool_definitions(is_owner: bool = True, tainted: bool = False) -> li
 
 async def execute_tool(name: str, args: dict, event, client, status=None, is_owner: bool = True, tainted: bool = False) -> str:
     """Execute dispatched tool and return stringified result to the ReAct agent."""
+    from core import config
     try:
         # ۱. قرنطینه امنیتی Taint: در صورتی که داده خارجی مصرف شده باشد، هیچ ابزار شبکه‌ای یا فایلی حق اجرا ندارد
         if tainted and name not in POST_TAINT_ALLOWED_TOOLS:
@@ -861,9 +868,27 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
             ts = int(time.time() * 1000)
             mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
             ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
-            ok = await voice.speak(text, mp3)
-            if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
+            ok = await voice.speak(text, mp3, client=client)
+            converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
+
+            # اگر تولید ویس یا تبدیل به ogg ناموفق بود، فال‌بک اضطراری مستقیم با Edge-TTS انجام می‌شود
+            if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
+                log.warning("Primary voice synthesis failed or produced invalid ogg. Executing direct Edge-TTS emergency fallback...")
+                try:
+                    import edge_tts
+                    clean_fallback = voice.prepare_for_tts(text)
+                    c = edge_tts.Communicate(clean_fallback, "fa-IR-FaridNeural", rate="+5%")
+                    await c.save(mp3)
+                    converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
+                    ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
+                except Exception as fb_err:
+                    log.error("Emergency Edge-TTS fallback failed: %s", fb_err)
+                    ok = False
+
+            if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
+                reply_to_id = getattr(event, "message", None)
+                reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
+                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
                 import bot
                 bot.self_sent.add(vmsg.id)
                 try:

@@ -392,6 +392,35 @@ async def follow_bot(
 
         act = next((m for m in msgs if not m.out and m.buttons), None)
         if act is None:
+            # بررسی آیا پیامی متنی با دستور یا لینک ارسال شده؟
+            text_act = next((m for m in msgs if not m.out and m.id > base and (m.message and len(m.message.strip()) > 2)), None)
+            if text_act:
+                from services.media import ai_nav
+                req_info = {
+                    "title": getattr(event, "message", "") or "دانلود",
+                    "season": season,
+                    "episode": episode,
+                    "quality": quality,
+                    "audio": audio
+                }
+                state = {"files_count": len(files), "history": [str(c) for c in clicked], "step": _}
+                decision = await ai_nav.ai_decide_action([text_act], req_info, state)
+                action_type = decision.get("action")
+                if action_type == "send_text":
+                    cmd = (decision.get("text") or "").strip()
+                    if cmd and cmd not in clicked:
+                        if status:
+                            try:
+                                await status.edit(f"🤖 [هوش مصنوعی] ارسال دستور به ربات: {cmd}...")
+                            except Exception:
+                                pass
+                        await client.send_message(bot, cmd)
+                        clicked.add(cmd)
+                        await asyncio.sleep(2.5)
+                        continue
+                elif action_type == "done" and files:
+                    return sorted(files.values(), key=lambda x: x.id), None
+
             if files:
                 # اگر فایلی دریافت شده و دکمه‌ای نیست، کمی صبر کن تا آخرین فایل‌ها هم برسند
                 await asyncio.sleep(2.0)
@@ -582,8 +611,9 @@ async def follow_bot(
         if audio_buttons:
             target_audio = audio or "subtitled"
             chosen_a_btn = audio_buttons.get(target_audio)
-            if not chosen_a_btn and audio_buttons:
-                chosen_a_btn = next(iter(audio_buttons.values()))
+            # فقط در صورتی که کاربر صوت خاصی نخواسته باشد به اولین گزینه فال‌بک می‌زند؛ اکیداً از انتخاب صوت مخالف خودداری می‌شود
+            if not chosen_a_btn and not audio:
+                chosen_a_btn = next(iter(audio_buttons.values()), None)
 
             if chosen_a_btn:
                 if status:
@@ -695,22 +725,22 @@ async def follow_bot(
             await asyncio.sleep(2.5)
             continue
 
-        # 10) ناوبری با هوش مصنوعی برای دکمه‌های خارج از الگو (بدون دکمه‌های بازگشت)
+        # 10) ناوبری با هوش مصنوعی برای دکمه‌ها یا دستورات متنی (بدون دکمه‌های بازگشت)
         from services.media import ai_nav
-        flat_valid = [b for b in buttons if b.data and b.data not in clicked and not ai_nav.is_back_button(b.text or "")]
-        if flat_valid:
-            try:
-                state = {"files_count": len(files), "last_action": "ناوبری", "step": _}
-                req_info = {
-                    "title": getattr(event, "message", "") or "دانلود",
-                    "season": season,
-                    "episode": episode,
-                    "quality": quality,
-                    "audio": audio
-                }
-                ai_idx = await ai_nav.ai_pick_button(flat_valid, act.message or "", req_info, state)
-                if ai_idx is not None and 0 <= ai_idx < len(flat_valid):
-                    chosen_b = flat_valid[ai_idx]
+        try:
+            state = {"files_count": len(files), "history": [str(c) for c in clicked], "step": _}
+            req_info = {
+                "title": getattr(event, "message", "") or "دانلود",
+                "season": season,
+                "episode": episode,
+                "quality": quality,
+                "audio": audio
+            }
+            decision = await ai_nav.ai_decide_action([act], req_info, state)
+            if decision.get("action") == "click_button" and decision.get("button"):
+                btn_dict = decision["button"]
+                chosen_b = btn_dict.get("raw") or next((b for b in buttons if (b.text or "").strip() == btn_dict.get("text")), None)
+                if chosen_b and getattr(chosen_b, "data", None) and chosen_b.data not in clicked:
                     if status:
                         try:
                             await status.edit(f"🎬 [هوش مصنوعی] در حال انتخاب «{chosen_b.text or ''}»...")
@@ -720,10 +750,22 @@ async def follow_bot(
                     clicked.add(chosen_b.data)
                     await asyncio.sleep(2.5)
                     continue
-                elif ai_idx is None and files:
-                    return sorted(files.values(), key=lambda x: x.id), None
-            except Exception as e:
-                log.warning("ai_nav in follow_bot error: %s", e)
+            elif decision.get("action") == "send_text":
+                cmd = (decision.get("text") or "").strip()
+                if cmd and cmd not in clicked:
+                    if status:
+                        try:
+                            await status.edit(f"🤖 [هوش مصنوعی] ارسال دستور به ربات: {cmd}...")
+                        except Exception:
+                            pass
+                    await client.send_message(bot, cmd)
+                    clicked.add(cmd)
+                    await asyncio.sleep(2.5)
+                    continue
+            elif decision.get("action") == "done" and files:
+                return sorted(files.values(), key=lambda x: x.id), None
+        except Exception as e:
+            log.warning("ai_nav in follow_bot error: %s", e)
 
         # 11) هر دکمه‌ی callback دیگه (آخرین راه - به استثنای دکمه‌های بازگشت)
         other = next((b for b in buttons if b.data and b.data not in clicked and not ai_nav.is_back_button(b.text or "")), None)

@@ -39,6 +39,7 @@ from services.social import drafter
 from core import logger
 from services.social import memegen
 from services.social import roast
+from services.social import roleplay
 from services.social import vibecheck
 
 log = logger.get_logger(__name__)
@@ -570,8 +571,6 @@ async def send_images(event, query: str, limit: int = 3):
 
 
 def _learn(question: str, answer: str) -> None:
-    if getattr(agent, "last_run_tainted", False):
-        return
     try:
         fact = ai.extract_fact(question, answer)
         if fact:
@@ -587,8 +586,6 @@ _PERSONAL_MARKERS = ("من ", " من", "دوست دارم", "علاقه", "تر�
 
 async def _trigger_learn(question: str, answer: str) -> None:
     global _last_learn_time
-    if getattr(agent, "last_run_tainted", False):
-        return
     q = (question or "").strip()
     if len(q) < 15:
         return
@@ -833,6 +830,28 @@ def _extract_channel_leave_keyword(q: str) -> str:
     return " ".join(q.split()).strip("،,:.؟?! ")
 
 
+_PERSIAN_REWRITE_PHRASES = (
+    "بازنویسی", "باز نویسی", "ویرایش", "ویراست", "اصلاح", "غلط گیر", "غلط‌گیری",
+    "درستش کن", "تمیزش کن", "تمیز کن", "پاکیزه کن", "ادیتش کن", "ریرایت", "rewrite",
+)
+
+
+def _is_persian_rewrite_request(q: str) -> bool:
+    """تشخیص درخواست بازنویسی/ویراستاری تمیز فارسی (اسکیل نگارش فارسی)."""
+    q = q or ""
+    return any(w in q for w in _PERSIAN_REWRITE_PHRASES)
+
+
+def _extract_rewrite_text(q: str) -> str:
+    """استخراج متن هدف از درخواست بازنویسی (اگر متن نیامد، اسکیل از ریپلای می‌خواند)."""
+    for w in _PERSIAN_REWRITE_PHRASES:
+        if w in q:
+            q = q.replace(w, " ", 1)
+            break
+    q = re.sub(r"^(کن|بده|بزن|لطفا|لطفاً|رو|این متن|متن|این)\s+", " ", q)
+    return " ".join(q.split()).strip("،,:.؟?! «»\"' ")
+
+
 _IMAGE_QUERY_WORDS = ("عکس", "تصویر", "پوستر")
 _IMAGE_ACTION_WORDS = (
     "نشونم بده", "نشون بده", "نشان بده", "پیداش کن", "پیدا کن", "بفرستش",
@@ -949,13 +968,13 @@ async def _handle_voice(event, status, msg, question) -> None:
         wants_summary = any(w in q_clean for w in SUMMARY_WORDS) or (is_reply_to_other and not q_clean)
 
         context = await get_context(event)
-        mem = memory.relevant_facts(text)
+        # حافظه‌ی صاحب اکانت هرگز بر اساس متن ویسِ دیگران بازیابی نمی‌شود (جلوگیری از استخراج حقایق خصوصی)
+        mem = ""
 
         # ۱. فقط استخراج و نمایش متن دقیق ویس
         if wants_transcript_only:
             out_msg = f"🎙 **متن پیاده‌شده از پیام صوتی:**\n\n«{text.strip()}»"
             await status.edit(out_msg)
-            memory.remember_exchange(event.chat_id, f"متن ویس: {text}", out_msg)
             return
 
         # ۲. خلاصه‌سازی ساختاریافته ویس (Option 2: Voice-to-Summary)
@@ -983,7 +1002,6 @@ async def _handle_voice(event, status, msg, question) -> None:
                 f"«{text.strip()}»"
             )
             await status.edit(final_reply)
-            memory.remember_exchange(event.chat_id, f"خلاصه ویس: {text}", summary)
             return
 
         # ۳. سوال خاص درباره ویس (مثلاً: کی میاد؟ ساعت چنده؟ آدرس چی بود؟)
@@ -996,7 +1014,6 @@ async def _handle_voice(event, status, msg, question) -> None:
             )
             answer = await asyncio.to_thread(ai.ask, qa_prompt, context, mem)
             await status.edit(answer)
-            memory.remember_exchange(event.chat_id, q_clean, answer)
             return
 
         # ۴. کاربر خودش ویس فرستاده و به عنوان پرامپت با کاپری صحبت کرده است (مکالمه صوتی دوطرفه)
@@ -1004,10 +1021,11 @@ async def _handle_voice(event, status, msg, question) -> None:
             await _stage(status, "🔍 در حال کاوش سه‌زبانه (انگلیسی، چینی، فارسی) و تحلیل تخصصی...")
         else:
             await _stage(status, "🤔 دارم فکر می‌کنم...")
+        mem = memory.relevant_facts(text)
         answer = await asyncio.to_thread(ai.ask, text, context, mem)
         await _stage(status, "🔊 دارم جواب رو صوتی می‌کنم...")
         mp3 = os.path.join(config.DOWNLOAD_DIR, f"reply_{int(time.time() * 1000)}.mp3")
-        ok = await voice.speak(answer, mp3)
+        ok = await voice.speak(answer, mp3, client=client)
         sent = False
         if ok:
             ogg = mp3 + ".ogg"
@@ -1032,7 +1050,7 @@ async def _handle_voice(event, status, msg, question) -> None:
             except Exception:
                 pass
         is_owner_voice = getattr(msg, "out", False) and not getattr(msg, "fwd_from", None)
-        if is_owner_voice and not getattr(agent, "last_run_tainted", False):
+        if is_owner_voice and not agent.get_last_run_tainted():
             memory.remember_exchange(event.chat_id, text, answer)
             asyncio.get_running_loop().create_task(asyncio.to_thread(_learn, text, answer))
         _safe_unlink(mp3)
@@ -1064,7 +1082,8 @@ async def _handle_vision(event, status, msg, question) -> None:
         await _stage(status, "📝 دارم جواب می‌دم...")
         await status.edit(desc)
     except Exception as e:
-        await _stage(status, f"❌ خطا: {e}")
+        log.error("Error in _handle_vision: %s", logger.redact_secrets(str(e)))
+        await _stage(status, "❌ خطایی در پردازش تصویر رخ داد؛ لطفاً مجدداً تلاش کنید.")
     finally:
         _safe_unlink(path)
 
@@ -1099,7 +1118,8 @@ async def _handle_video(event, status, msg, question) -> None:
         final = await asyncio.to_thread(ai.refine_video_analysis, raw)
         await status.edit(final or raw)
     except Exception as e:
-        await _stage(status, f"❌ خطا: {e}")
+        log.error("Error in _handle_video: %s", logger.redact_secrets(str(e)))
+        await _stage(status, "❌ خطایی در پردازش ویدیو رخ داد؛ لطفاً مجدداً تلاش کنید.")
     finally:
         _safe_unlink(path)
 
@@ -1136,7 +1156,8 @@ async def _handle_document(event, status, msg, question) -> None:
         else:
             await _send_as_md(event, status, ans)
     except Exception as e:
-        await _stage(status, f"❌ خطا: {e}")
+        log.error("Error in _handle_document: %s", logger.redact_secrets(str(e)))
+        await _stage(status, "❌ خطایی در پردازش فایل رخ داد؛ لطفاً مجدداً تلاش کنید.")
     finally:
         _safe_unlink(path)
 
@@ -1212,22 +1233,32 @@ def _render_model_list(service: str, page: int):
 
 def parse_voice_command(text: str) -> Optional[dict]:
     t = text.lower().strip()
+
+    # ۱. دستورات اختصاصی موتور ربات تلگرام (@jarvis_roobot)
+    if any(k in t for k in ("ربات", "جارویس", "jarvis", "jarvoice")):
+        from services.voice import jarvis_bot
+        v_info, t_info = jarvis_bot.parse_voice_and_tone(t)
+        if v_info or t_info:
+            return {"action": "set_jarvis", "voice": v_info, "tone": t_info}
+        if any(w in t for w in ("صدا", "ویس", "موتور", "فعال", "روشن")):
+            return {"action": "set_engine", "engine": "jarvis"}
+
     # اگر دستور مربوط به ویس دادن عادی یا سوال دیگری است، دستور سوئیچ نیست
     voice_keywords = (
         "گوینده", "صدا", "فرید", "دلارا", "جمینای", "جمنای", "gemini",
         "شارون", "پاک", "پک", "کوره", "فنریر", "آئوده", "ائوده",
-        "charon", "puck", "kore", "fenrir", "aoede"
+        "charon", "puck", "kore", "fenrir", "aoede", "ربات", "جارویس"
     )
     if any(w in t for w in ("بده", "بگیر", "بفرست", "بگو")) and not any(k in t for k in voice_keywords):
         return None
-    if not any(w in t for w in ("صدا", "گوینده", "ویس", "شارون", "پاک", "کوره", "فنریر", "آئوده", "charon", "puck", "kore", "fenrir", "aoede")):
+    if not any(w in t for w in ("صدا", "گوینده", "ویس", "شارون", "پاک", "کوره", "فنریر", "آئوده", "charon", "puck", "kore", "fenrir", "aoede", "ربات", "جارویس")):
         return None
 
-    # ۱. استعلام لیست یا وضعیت صداها
+    # ۲. استعلام لیست یا وضعیت صداها
     if any(k in t for k in ("چه صدایی", "صدای فعال", "کدوم صدا", "لیست صدا", "صداها چیه", "گوینده‌ها", "لیست گوینده", "چه گوینده")) or ("صدا" in t and ("چیه" in t or "چیست" in t or "کدوم" in t)):
         return {"action": "info"}
 
-    # ۲. گوینده‌های اختصاصی Gemini TTS
+    # ۳. گوینده‌های اختصاصی Gemini TTS
     if "شارون" in t or "charon" in t or ("بم" in t and "جمینای" in t):
         return {"action": "set_gemini", "voice": "Charon"}
     if "کوره" in t or "kore" in t or ("زن" in t and "جمینای" in t):
@@ -1239,15 +1270,15 @@ def parse_voice_command(text: str) -> Optional[dict]:
     if "پاک" in t or "پک" in t or "puck" in t:
         return {"action": "set_gemini", "voice": "Puck"}
 
-    # ۳. موتور کلی جمینای (بدون گوینده خاص)
+    # ۴. موتور کلی جمینای (بدون گوینده خاص)
     if any(k in t for k in ("جمینای", "جمنای", "gemini")):
         return {"action": "set_engine", "engine": "gemini"}
 
-    # ۴. موتور مایکروسافت
+    # ۵. موتور مایکروسافت
     if any(k in t for k in ("مایکروسافت", "ماکروسافت", "microsoft", "edge")):
         return {"action": "set_engine", "engine": "microsoft"}
 
-    # ۵. گوینده‌های مایکروسافت
+    # ۶. گوینده‌های مایکروسافت
     if "دلارا" in t or "زن" in t:
         return {"action": "set_edge", "voice": "fa-IR-DilaraNeural"}
     if "فرید" in t or "مرد" in t:
@@ -1261,13 +1292,27 @@ async def handle_voice_command(event, status, cmd: dict):
     if act == "info":
         eng = settings.get_tts_engine()
         speaker = settings.get_voice_speaker()
-        cur_v = settings.get_gemini_voice() if eng == "gemini" else settings.get_tts_voice()
-        eng_name = "Google Gemini TTS" if eng == "gemini" else "Microsoft Edge-TTS"
+        if eng == "jarvis":
+            eng_name = "ربات تلگرام (@jarvis_roobot)"
+        elif eng == "gemini":
+            eng_name = "Google Gemini TTS"
+        else:
+            eng_name = "Microsoft Edge-TTS"
+
+        from services.voice import jarvis_bot
+        vid = settings.get_jarvis_voice()
+        tid = settings.get_jarvis_tone()
+        cur_jv = jarvis_bot.VOICES.get(str(vid), jarvis_bot.VOICES["1"])
+        cur_jt = jarvis_bot.TONES.get(str(tid), jarvis_bot.TONES["1"])
+
         msg = (
             f"🎙 **داشبورد وضعیت صدای کاپری:**\n\n"
             f"🔊 **گوینده فعال کنونی:** {speaker}\n"
             f"⚙️ **موتور صوتی:** {eng_name}\n\n"
             f"━━━━━━━━━━━━━━━━━━\n"
+            f"🤖 **موتور ربات تلگرام (@jarvis_roobot):**\n"
+            f"• گوینده انتخابی: {cur_jv['name']} | لحن: {cur_jt['name']}\n"
+            f"• دستور انتخاب سریع: `کاپری ربات سارا 6` یا `کاپری صدای ربات`\n\n"
             f"💎 **گوینده‌های هوشمند Google Gemini:**\n"
             f"• `کاپری صدا شارون` — بم، عمیق، رسمی و جدی (مردانه)\n"
             f"• `کاپری صدا کوره` — آرامش‌بخش، گرم و باوقار (زنانه)\n"
@@ -1275,9 +1320,17 @@ async def handle_voice_command(event, status, cmd: dict):
             f"• `کاپری صدا فنریر` — رسا، باصلابت و قدرتمند (حماسی)\n"
             f"• `کاپری صدا آئوده` — ملایم، لطیف و متفکر (آرام)\n\n"
             f"⚡ **گوینده‌های نامحدود Microsoft Edge-TTS:**\n"
-            f"• `کاپری صدا دلارا` — زنانه، طبیعی و شفاف (رایگان و نامحدود)\n"
-            f"• `کاپری صدا فرید` — مردانه، واضح و رسا (رایگان و نامحدود)"
+            f"• `کاپری صدا دلارا` — زنانه، طبیعی و شفاف\n"
+            f"• `کاپری صدا فرید` — مردانه، واضح و رسا"
         )
+        await status.edit(msg)
+        return
+
+    if act == "set_jarvis":
+        v_info = cmd.get("voice")
+        t_info = cmd.get("tone")
+        from services.voice import jarvis_bot
+        ok, msg = await jarvis_bot.configure_jarvis(client, v_info, t_info)
         await status.edit(msg)
         return
 
@@ -1298,7 +1351,22 @@ async def handle_voice_command(event, status, cmd: dict):
     if act == "set_engine":
         engine = cmd.get("engine", "microsoft")
         settings.set_tts_engine(engine)
-        if engine == "gemini":
+        if engine == "jarvis":
+            from services.voice import jarvis_bot
+            vid = settings.get_jarvis_voice()
+            tid = settings.get_jarvis_tone()
+            cur_v = jarvis_bot.VOICES.get(str(vid), jarvis_bot.VOICES["1"])
+            cur_t = jarvis_bot.TONES.get(str(tid), jarvis_bot.TONES["1"])
+            await status.edit(
+                f"✅ موتور صدا: **ربات تلگرام (@{jarvis_bot.JARVIS_BOT})**\n\n"
+                f"👤 **گوینده فعال:** {cur_v['name']} ({cur_v['gender']}) — `/voice{vid}`\n"
+                f"🎭 **لحن فعال:** {cur_t['name']} ({cur_t['desc']}) — `/tone{tid}`\n\n"
+                f"💡 برای تغییر گوینده و لحن کافی است بگویید:\n"
+                f"• `کاپری ربات سارا 6` (گوینده سارا با لحن حماسی)\n"
+                f"• `کاپری ربات باران 2` (گوینده باران با لحن صمیمی)\n"
+                f"• `کاپری ربات کیوان 4` (گوینده کیوان با لحن باانرژی)"
+            )
+        elif engine == "gemini":
             v = settings.get_gemini_voice()
             info = voice.GEMINI_VOICES.get(v, {})
             fa_name = info.get("fa", v)
@@ -1662,6 +1730,10 @@ async def on_outgoing(event):
         status = await event.reply("🧠 در حال جمع‌آوری اطلاعات...")
         self_sent.add(status.id)
 
+        # حالت رول‌پلی (راوی تعاملی): شروع/پایان/نگه‌داشتن/ادامه + تمام پیام‌های حین بازی
+        if await roleplay.handle(event, status, question, client):
+            return
+
         # ۱. فرامین قطعی تنظیمات و پیکربندی:
         # تغییر موتور و گوینده ویس (Microsoft)
         v_cmd = parse_voice_command(question)
@@ -1704,7 +1776,17 @@ async def on_outgoing(event):
             except Exception as e:
                 result = f"❌ خطا در ساخت صورتجلسه: {logger.redact_secrets(str(e))}"
             await _safe_edit_or_send(event, status, result)
-            memory.remember_exchange(event.chat_id, question, result)
+            return
+
+        # بازنویسی/ویراستاری تمیز فارسی (اسکیل نگارش فارسی — مسیر مستقیم و مطمئن)
+        if _is_persian_rewrite_request(question):
+            from ai_engine import skills_manager
+            await _stage(status, "✍️ دارم متن رو ویرایش و بازنویسی می‌کنم...")
+            try:
+                result = await skills_manager.execute_skill("persian_writing", {"text": _extract_rewrite_text(question)}, client, event)
+            except Exception as e:
+                result = f"❌ خطا در بازنویسی متن: {logger.redact_secrets(str(e))}"
+            await _safe_edit_or_send(event, status, result)
             return
 
         # مرتب‌سازی خودکار پوشه‌ها (مسیر مستقیم و مطمئن، مستقل از ایجنت)
@@ -1781,7 +1863,6 @@ async def on_outgoing(event):
             report = await chatanalysis.analyze_chat(client, event)
             await _stage(status, "📝 دارم گزارش رو می‌نویسم...")
             await _send_as_md(event, status, report)
-            memory.remember_exchange(event.chat_id, question, report)
             return
 
         # ۲. کلیه پیام‌ها مستقیماً وارد ایجنت هوشمند می‌شوند و مدل خودش ابزار را تشخیص می‌دهد
@@ -1793,7 +1874,6 @@ async def on_outgoing(event):
 
         # جستجوی وب (مسیر مستقیم، سریع و با خروجی جمینای — مستقل از ایجنت کند)
         if _is_web_question(question):
-            agent.last_run_tainted = True
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
             raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem)
             answer = agent.sanitize_tainted_output(raw_answer)
@@ -1820,7 +1900,7 @@ async def on_outgoing(event):
         await _stage(status, "🤔 دارم فکر می‌کنم...")
         answer = await agent.run_agent(question, context, mem, event, client, status, is_owner=True, sender_name=config.OWNER_NAME or "مالک")
 
-        is_tainted = getattr(agent, "last_run_tainted", False)
+        is_tainted = agent.get_last_run_tainted()
 
         if answer.startswith("__VOICE_SENT__:"):
             real_text = answer.replace("__VOICE_SENT__:", "").strip()
@@ -1838,9 +1918,23 @@ async def on_outgoing(event):
             ts = int(time.time() * 1000)
             mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
             ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
-            ok = await voice.speak(voice_text, mp3)
-            if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
+            ok = await voice.speak(voice_text, mp3, client=client)
+            converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
+            if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
+                try:
+                    import edge_tts
+                    clean_fb = voice.prepare_for_tts(voice_text)
+                    c = edge_tts.Communicate(clean_fb, "fa-IR-FaridNeural", rate="+5%")
+                    await c.save(mp3)
+                    converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
+                    ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
+                except Exception:
+                    ok = False
+
+            if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
+                reply_to_id = getattr(event, "message", None)
+                reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
+                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
                 register_self_sent(vmsg, default_chat_id=event.chat_id)
                 _safe_unlink(mp3)
                 _safe_unlink(ogg)
@@ -1958,6 +2052,12 @@ async def on_incoming_pm(event):
     if sender is None or getattr(sender, "bot", False):
         return
 
+    # بلاک فورواردها و پیام‌های ارسال‌شده از طریق ربات‌ها (جلوگیری از اجرای متن غریبه با دسترسی کاربر مجاز)
+    if getattr(event, "fwd_from", None) or getattr(event.message, "fwd_from", None):
+        return
+    if getattr(event, "via_bot_id", None) or getattr(event.message, "via_bot_id", None) or getattr(event, "via_bot", None) or getattr(event.message, "via_bot", None):
+        return
+
     # ۲. اولین چک: هر فرستنده غیر از مالک که در لیست مجوز نباشد، هیچ پاسخی نگیرد (return ساده و بی‌صدا)
     uid = event.sender_id
     if not access.is_allowed(uid) or access.is_denied(uid):
@@ -2051,9 +2151,23 @@ async def on_incoming_pm(event):
             ts = int(time.time() * 1000)
             mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
             ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
-            ok = await voice.speak(voice_text, mp3)
-            if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
+            ok = await voice.speak(voice_text, mp3, client=client)
+            converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
+            if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
+                try:
+                    import edge_tts
+                    clean_fb = voice.prepare_for_tts(voice_text)
+                    c = edge_tts.Communicate(clean_fb, "fa-IR-FaridNeural", rate="+5%")
+                    await c.save(mp3)
+                    converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
+                    ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
+                except Exception:
+                    ok = False
+
+            if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
+                reply_to_id = getattr(event, "message", None)
+                reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
+                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
                 register_self_sent(vmsg, default_chat_id=event.chat_id)
                 _safe_unlink(mp3)
                 _safe_unlink(ogg)
@@ -2065,7 +2179,7 @@ async def on_incoming_pm(event):
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
-        is_tainted = getattr(agent, "last_run_tainted", False)
+        is_tainted = agent.get_last_run_tainted()
         lp = not is_tainted
         if _is_long_or_code(answer):
             await _send_as_md(event, status, answer)

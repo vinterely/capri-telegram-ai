@@ -66,7 +66,10 @@ class TestSevenSecurityHardens(unittest.IsolatedAsyncioTestCase):
         event.out = False
         event.is_private = True
         event.is_group = False
-        event.message = MagicMock(file=None, photo=None, video=None, document=None, voice=None, audio=None, media=None)
+        event.fwd_from = None
+        event.via_bot = None
+        event.via_bot_id = None
+        event.message = MagicMock(file=None, photo=None, video=None, document=None, voice=None, audio=None, media=None, fwd_from=None, via_bot=None, via_bot_id=None)
         event.get_reply_message = AsyncMock(return_value=None)
         event.reply = AsyncMock()
         event.get_sender = AsyncMock(return_value=MagicMock(first_name="کاربر مجاز", bot=False))
