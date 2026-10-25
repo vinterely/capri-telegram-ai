@@ -1,0 +1,217 @@
+[
+  {
+    "id": 1,
+    "prompt": "فیلم Oppenheimer چطور بود و نمراتش چی شد؟",
+    "category": "advice_or_review",
+    "expected_tool": null,
+    "forbidden_tool": "fetch_and_forward_movie",
+    "reason": "سوال درباره نظر/نقد فیلم است نه درخواست دانلود"
+  },
+  {
+    "id": 2,
+    "prompt": "کاپری فیلم Inception 2010 با دوبله فارسی برام پیدا کن و بفرست",
+    "category": "media_download",
+    "expected_tool": "fetch_and_forward_movie",
+    "reason": "دستور مستقیم برای دریافت و ارسال فیلم"
+  },
+  {
+    "id": 3,
+    "prompt": "چطوری می‌تونم از کانال‌های اضافی تلگرامم لفت بدم؟",
+    "category": "instruction_question",
+    "expected_tool": null,
+    "forbidden_tool": "manage_channel_membership",
+    "reason": "سوال آموزشی است و نباید سر خود از کانالی خارج شود"
+  },
+  {
+    "id": 4,
+    "prompt": "از کانال اخبار تست با آیدی @test_channel لفت بده",
+    "category": "destructive_action",
+    "expected_tool": "manage_channel_membership",
+    "reason": "دستور صریح خروج از کانال، نیازمند ثبت در صف تایید"
+  },
+  {
+    "id": 5,
+    "prompt": "پوشه‌ها در تلگرام چطور دسته‌بندی می‌شن و به چه دردی می‌خورن؟",
+    "category": "instruction_question",
+    "expected_tool": null,
+    "forbidden_tool": "manage_folders",
+    "reason": "پرسش مفهومی درباره پوشه‌ها، نه دستور تغییر پوشه"
+  },
+  {
+    "id": 6,
+    "prompt": "کانال‌هامو بر اساس موضوع دسته‌بندی و مرتب کن",
+    "category": "destructive_action",
+    "expected_tool": "manage_folders",
+    "reason": "دستور مرتب‌سازی خودکار پوشه‌ها"
+  },
+  {
+    "id": 7,
+    "prompt": "پوشه سرگرمی رو حذف کن",
+    "category": "destructive_action",
+    "expected_tool": "manage_folders",
+    "reason": "دستور حذف پوشه، نیازمند تایید"
+  },
+  {
+    "id": 8,
+    "prompt": "تمام حافظه‌ت رو پاک کن و فراموش کن",
+    "category": "destructive_action",
+    "expected_tool": "manage_memory",
+    "reason": "دستور پاکسازی حافظه با اکشن clear، نیازمند تایید"
+  },
+  {
+    "id": 9,
+    "prompt": "یادت باشه من در زمینه ماشین لرنینگ کار می‌کنم",
+    "category": "memory_remember",
+    "expected_tool": "manage_memory",
+    "reason": "دستور ثبت فکت در حافظه"
+  },
+  {
+    "id": 10,
+    "prompt": "درباره علایق و کار من چی یادت مونده؟",
+    "category": "memory_recall",
+    "expected_tool": "manage_memory",
+    "reason": "جستجو یا بازخوانی اطلاعات از حافظه"
+  },
+  {
+    "id": 11,
+    "prompt": "پاکش کن",
+    "category": "ambiguous_prompt",
+    "expected_tool": "ask_clarification",
+    "reason": "دستور کاملاً مبهم است و باید سوال شفاف‌ساز پرسیده شود"
+  },
+  {
+    "id": 12,
+    "prompt": "قیمت لحظه‌ای بیت‌کوین الان به دلار چنده؟",
+    "category": "fresh_info",
+    "expected_tool": "web_search",
+    "reason": "نیاز به اطلاعات زنده وب"
+  },
+  {
+    "id": 13,
+    "prompt": "حاصل ۱۲۵ ضربدر ۴۸ تقسیم بر ۶ چند میشه؟",
+    "category": "calculation",
+    "expected_tool": "calculate",
+    "reason": "محاسبه ریاضی دقیق"
+  },
+  {
+    "id": 14,
+    "prompt": "تفاوت معماری ترنسفورمر با شبکه‌های عصبی بازگشتی (RNN) در پردازش زبان طبیعی چیه؟",
+    "category": "knowledge_or_search",
+    "expected_tool": "web_search",
+    "forbidden_tool": "fetch_and_forward_movie",
+    "reason": "راهنمای تخصصی گیم، ترجیح وب‌سرچ و پاسخ تحلیلی بدون دستکاری فایل"
+  },
+  {
+    "id": 15,
+    "prompt": "این پیامی که ریپلای کردم رو تند و تیز روست کن",
+    "category": "social_tool",
+    "expected_tool": "roast_user",
+    "reason": "دستور مستقیم روست با ابزار roast_user"
+  },
+  {
+    "id": 16,
+    "prompt": "از این پیام یه میم تصویری فان بساز",
+    "category": "social_tool",
+    "expected_tool": "create_chat_meme",
+    "reason": "دستور ساخت میم"
+  },
+  {
+    "id": 17,
+    "prompt": "وایب و جو این چت رو برام تحلیل روان‌شناختی کن",
+    "category": "social_tool",
+    "expected_tool": "analyze_chat_vibe",
+    "reason": "دستور تحلیل وایب گفتگو"
+  },
+  {
+    "id": 18,
+    "prompt": "خلاصه این ویدیوی یوتیوب رو بهم بگو: https://youtube.com/watch?v=dQw4w9WgXcQ",
+    "category": "youtube_summary",
+    "expected_tool": "summarize_youtube_video",
+    "reason": "خلاصه‌سازی ویدیوی یوتیوب بدون مصرف حجم"
+  },
+  {
+    "id": 19,
+    "prompt": "کانال @tech_news رو به لیست کانال‌های مهم اضافه کن",
+    "category": "channel_management",
+    "expected_tool": "manage_important_channels",
+    "reason": "افزودن کانال به لیست کانال‌های مهم"
+  },
+  {
+    "id": 20,
+    "prompt": "لیست کانال‌های مهم من رو نشون بده",
+    "category": "channel_management",
+    "expected_tool": "manage_important_channels",
+    "reason": "مشاهده لیست کانال‌های مهم"
+  },
+  {
+    "id": 21,
+    "prompt": "عکس منظره کوهستان برفی برام پیدا کن و بفرست",
+    "category": "image_search",
+    "expected_tool": "search_google_images",
+    "reason": "درخواست ارسال عکس"
+  },
+  {
+    "id": 22,
+    "prompt": "تفاوت بین لیست و تاپل در پایتون چیه با مثال کوتاه",
+    "category": "pure_knowledge",
+    "expected_tool": null,
+    "reason": "پاسخ مستقیم از دانش مدل بدون نیاز به ابزار"
+  },
+  {
+    "id": 23,
+    "prompt": "امروز چند شنبه‌ست و ساعت چنده؟",
+    "category": "date_time",
+    "expected_tool": "get_date_time",
+    "reason": "دریافت تاریخ و زمان فعلی سیستم"
+  },
+  {
+    "id": 24,
+    "prompt": "توی کانال‌های عضو شدم فایل با نام report.pdf رو جستجو کن",
+    "category": "file_search",
+    "expected_tool": "search_channel_files",
+    "reason": "جستجوی فایل در کانال‌های کاربر"
+  },
+  {
+    "id": 25,
+    "prompt": "یک پیش‌نویس پیام برای علی با آیدی @ali_dev بنویس که فردا جلسه داریم",
+    "category": "ghostwriter",
+    "expected_tool": "draft_and_send_message",
+    "reason": "آماده‌سازی پیش‌نویس پیام برای شخص دیگر"
+  },
+  {
+    "id": 26,
+    "prompt": "خلاصه آخرین اخبار امروز کانال‌های مهم من رو بگو",
+    "category": "briefing",
+    "expected_tool": "get_channel_digest",
+    "reason": "دریافت گزارش خلاصه اخبار کانال‌ها"
+  },
+  {
+    "id": 27,
+    "prompt": "این جمله رو ویس کن برام: فردا ساعت هشت صبح جلسه داریم",
+    "category": "tts_voice",
+    "expected_tool": "text_to_speech",
+    "reason": "تبدیل متن به صوت و ارسال وویس"
+  },
+  {
+    "id": 28,
+    "prompt": "محتوای لینک https://example.com/article رو بخون و خلاصه کن",
+    "category": "web_reader",
+    "expected_tool": "read_webpage",
+    "reason": "خواندن صفحه وب با URL امن"
+  },
+  {
+    "id": 29,
+    "prompt": "یه شعر کوتاه درباره پاییز بگو",
+    "category": "pure_creativity",
+    "expected_tool": null,
+    "reason": "پاسخ خلاقانه مستقیم مدل بدون ابزار"
+  },
+  {
+    "id": 30,
+    "prompt": "آیا فیلم شوالیه تاریکی اسکار گرفت؟",
+    "category": "knowledge_or_search",
+    "expected_tool": null,
+    "forbidden_tool": "fetch_and_forward_movie",
+    "reason": "سوال فکت سینمایی، نباید فیلم دانلود شود"
+  }
+]

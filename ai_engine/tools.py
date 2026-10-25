@@ -1,0 +1,1052 @@
+import asyncio
+import json
+import re
+
+from ai_engine import ai
+from services.social import briefing
+from core import cache
+from services.telegram import channels
+from core import config
+from services.media import fetch
+from services.telegram import folders
+from services.search import gsearch
+from core import memory
+from services.search import search
+from services.search import websearch
+
+# Tools permissible for non-owner whitelisted users
+STRANGER_ALLOWED_TOOLS = {
+    "web_search", "get_current_datetime", "send_voice_note",
+    "search_google_images", "summarize_youtube_video", "read_webpage",
+    "roast_target", "vibe_check", "generate_meme", "ask_clarification",
+}
+
+# Read-only tools permitted after ingesting untrusted external sources (web/youtube/channels).
+# All write/destructive tools are blocked once tainted (deny-by-default).
+READ_ONLY_TOOLS = {
+    "web_search", "read_webpage", "summarize_youtube_video",
+    "search_channel_files", "search_in_channel", "search_music",
+    "search_google_images", "get_daily_briefing", "vibe_check",
+    "get_current_datetime", "ask_clarification", "get_vault_info",
+}
+UNTRUSTED_SOURCE_TOOLS = {
+    "web_search", "read_webpage", "summarize_youtube_video", "search_channel_files",
+    "search_in_channel", "search_music", "get_daily_briefing", "vibe_check",
+}
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "جستجو در وب برای اخبار روز، قیمت‌ها، وقایع، مشخصات فنی یا اطلاعاتی که از صحت آن مطمئن نیستی.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "عبارت جستجو."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_channel_files",
+            "description": "جستجوی فایل، آهنگ یا ویدیو در تمام کانال‌ها و گروه‌های تلگرام کاربر و فوروارد آن.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "نام فایل یا کلمه کلیدی."},
+                    "kind": {"type": "string", "enum": ["video", "music", "document"], "description": "نوع رسانه."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_music",
+            "description": "گرفتن آهنگ یا موزیک از @DeezerMusicBot (و در صورت خطا، جستجو در کانال‌ها و گروه‌های تلگرام) و ارسال فایل صوتی بدون کپشن. برای درخواست‌هایی مثل «آهنگ ... بفرست»، «موزیک ... بده»، «اهنگ ... بذار».",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "نام آهنگ یا نام خواننده."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_in_channel",
+            "description": "جستجوی فایل یا پیام در یک کانال تلگرامی مشخص با نام channel_name و ارسال آن.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "channel_name": {"type": "string", "description": "نام یا شناسه کانال."},
+                    "query": {"type": "string", "description": "نام فایل یا موضوع."},
+                    "kind": {"type": "string", "enum": ["video", "music", "document"], "description": "نوع رسانه."}
+                },
+                "required": ["channel_name", "query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_and_forward_movie",
+            "description": "دریافت و ارسال مستقیم فایل فیلم یا سریال از بات‌های تلگرام. فقط وقتی کاربر صریحاً دستور دانلود/ارسال فایل فیلم می‌دهد (نه برای نقد، تحلیل یا سوالات عمومی).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "نام فیلم/سریال یا لینک دانلود."},
+                    "quality": {"type": "integer", "description": "کیفیت عددی مانند 1080، 720، 480."}
+                },
+                "required": ["target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_google_images",
+            "description": "جستجو و ارسال تصاویر گوگل در چت تلگرام. فقط وقتی کاربر عکس موضوعی را می‌خواهد.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "موضوع یا نام شخص برای تصویر."},
+                    "count": {"type": "integer", "description": "تعداد عکس‌ها (پیش‌فرض ۳)."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_memory",
+            "description": "مدیریت حافظه ماندگار (افزودن، حذف، لیست یا پاکسازی علایق و مشخصات کاربر).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["add", "remove", "list", "clear"], "description": "عملیات حافظه."},
+                    "fact": {"type": "string", "description": "متن واقعیت برای add یا remove."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_channel_membership",
+            "description": "مدیریت عضویت یا خروج از کانال‌های تلگرام (join یا leave). خروج (لفت دادن) نیازمند تأیید کاربر است.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["join", "leave"], "description": "leave برای لفت دادن یا خروج از کانال؛ join برای عضویت یا پیوستن."},
+                    "target": {"type": "string", "description": "نام یا لینک کانال مورد نظر."}
+                },
+                "required": ["action", "target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_folders",
+            "description": "مدیریت پوشه‌های چت تلگرام: مشاهده لیست پوشه‌ها (action='list')، ساخت پوشه (action='create')، حذف (action='delete')، افزودن کانال به پوشه (action='assign')، یا مرتب‌سازی خودکار همه کانال‌ها و گروه‌ها (action='auto_sort'). وقتی کاربر گفت «پوشه‌هامو مرتب کن» یا «پوشه‌ها رو دسته‌بندی کن» حتماً auto_sort را صدا بزن.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "create", "delete", "assign", "auto_sort"], "description": "عملیات پوشه."},
+                    "folder_name": {"type": "string", "description": "نام پوشه."},
+                    "channel_name": {"type": "string", "description": "نام کانال."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_important_channels",
+            "description": "مدیریت کانال‌های مهم تلگرام برای گزارش و خلاصه روزانه (add، remove، list).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["add", "remove", "list"], "description": "عملیات."},
+                    "channel_name": {"type": "string", "description": "نام کانال."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_daily_briefing",
+            "description": "دریافت گزارش و خلاصه پیام‌های جدید کانال‌های مهم تلگرام کاربر.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_datetime",
+            "description": "دریافت تاریخ شمسی و میلادی و ساعت فعلی به وقت ایران.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_webpage",
+            "description": "مطالعه و استخراج متن کامل یک صفحه وب از طریق لینک URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "آدرس اینترنتی کامل صفحه وب."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_youtube_video",
+            "description": "استخراج زیرنویس و خلاصه متنی ویدیوی یوتیوب از روی لینک.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "لینک کامل یا شناسه ویدیو در یوتیوب."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "download_youtube_video",
+            "description": "دانلود و ارسال فایل ویدیوی یوتیوب در چت با کیفیت دلخواه (پیش‌فرض 720p). فقط وقتی کاربر دستور دانلود یا فایل ویدیو می‌خواهد.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "لینک ویدیوی یوتیوب."},
+                    "quality": {"type": "integer", "description": "کیفیت عددی مانند 1080، 720، 480."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_voice_note",
+            "description": "تبدیل پاسخ به پیام صوتی (ویس) تلگرام با صدای طبیعی. وقتی کاربر ویس یا پیام صوتی خواسته است.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "متن صمیمی و محاوره‌ای برای ویس."}
+                },
+                "required": ["text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_clarification",
+            "description": "پرسیدن یک سوال کوتاه و صمیمی برای رفع ابهام در صورتی که درخواست کاربر ناقص یا دوپهلو باشد.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "سوال شفاف‌سازی."}
+                },
+                "required": ["question"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draft_and_send_message",
+            "description": "تنظیم پیش‌نویس پیام و ارسال به مخاطب در تلگرام پس از تأیید (Ghostwriter).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_contact": {"type": "string", "description": "نام مخاطب، آیدی یا 'reply'."},
+                    "message_intent": {"type": "string", "description": "متن یا منظور پیام."},
+                    "tone": {"type": "string", "description": "لحن پیام."}
+                },
+                "required": ["target_contact", "message_intent"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "roast_target",
+            "description": "روست کردن، حاضرجوابی و شوخی سنگین با شخص مقابل در چت با ریپلای روی پیام او.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "style": {"type": "string", "description": "سبک روست (سنگین، طعنه‌دار، کنایه‌آمیز)."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vibe_check",
+            "description": "تحلیل روان‌شناختی جو چت و لحن پیام‌های اخیر.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "تمرکز تحلیلی کاربر."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_meme",
+            "description": "ساخت تصویر میم طنز از روی عکس یا پیام ریپلای شده طرف مقابل.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "caption": {"type": "string", "description": "ایده یا متن طنز میم."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_or_update_skill",
+            "description": "ساخت و ثبت مهارت پایتونی جدید برای کاپری.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "نام اسکیل."},
+                    "description": {"type": "string", "description": "توضیح اسکیل."},
+                    "parameters": {"type": "object", "description": "اسکیمای JSON."},
+                    "python_code": {"type": "string", "description": "کد پایتون execute(args, client, event)."}
+                },
+                "required": ["name", "description", "python_code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "مشاهده لیست تمام اسکیل‌های فعال.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_skill",
+            "description": "حذف یک اسکیل داینامیک.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "نام اسکیل."}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_dnd",
+            "description": "مدیریت حالت سرشلوغ، خواب و مزاحم نشوید (DND). هر زمان کاربر گفت خوابم، کلاسم، جلسه دارم، کار دارم، سرم شلوغه، مزاحمم نشید (action='enable')، یا گفت بیدار شدم، آزاد شدم، تموم شد، لغو کن (action='disable')، یا وضعیت خواست (action='status'). پارامتر reason علت مشغله است و duration_or_time زمان پایان (مثلاً: «تا ساعت ۱۴»، «۲ ساعت»، «تا فردا صبح»).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["enable", "disable", "status"], "description": "عملیات: enable برای فعال‌سازی، disable برای خاموش کردن، status برای وضعیت."},
+                    "reason": {"type": "string", "description": "علت سرشلوغی مانند خواب، کلاس دانشگاه، جلسه کاری، درس و امتحان."},
+                    "duration_or_time": {"type": "string", "description": "مدت زمان یا ساعت پایان، مثلاً: «ساعت ۱۴»، «۲ ساعت»، «تا فردا صبح»."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_reminders",
+            "description": "مدیریت یادآورها و تسک‌های زمان‌دار در Saved Messages. هر زمان کاربر گفت فلان ساعت یادم بنداز، نیم ساعت دیگه بگو، یادم نره (action='add')، یا یادآورها رو نشون بده (action='list')، یا پاک/حذف کن (action='clear' یا action='delete'). پارامتر text متن یادآوری، time_expression زمان سررسید آن، و index شماره یادآور برای حذف تکی است.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["add", "list", "clear", "delete", "remove"], "description": "عملیات: add برای ثبت یادآور، list برای نمایش، clear یا delete برای پاک کردن یادآورها."},
+                    "text": {"type": "string", "description": "متن موضوع یادآوری (مثلاً: «ارسال جزوه به استاد»)."},
+                    "time_expression": {"type": "string", "description": "زمان سررسید یادآوری، مثلاً: «ساعت ۱۰»، «نیم ساعت دیگه»، «فردا ساعت ۹ صبح»."},
+                    "index": {"type": "integer", "description": "شماره یا اندیس یادآور (مثلاً ۱ یا ۲) در صورت درخواست حذف یک مورد خاص."}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "organize_saved_messages",
+            "description": "دسته‌بندی، تفکیک و انتقال پیام‌های ذخیره شده (Saved Messages) به سوپرگروه اختصاصی صندوق هوشمند (Capri Vault) با تاپیک‌های تفکیک‌شده. هر زمان کاربر گفت پیام‌های سیو مسیج را مرتب کن، یا اگر در چت Saved Messages بود و با عباراتی عامیانه مانند «اینجا را مرتب کن»، «پیام‌های اینجا رو بچین»، «بریز تو تاپیک‌ها»، «صندوقو مرتب کن» درخواست تفکیک داد، از این ابزار استفاده کن. پارامتر limit تعداد پیام‌ها است (مثلاً ۱۰، ۵۰، ۱۰۰، ۵۰۰؛ برای همه عدد 1- ارسال شود).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "تعداد پیام‌های اخیر برای سازمان‌دهی (مثلاً ۱۰، ۵۰، ۵۰۰، ۱۰۰۰). برای تمام پیام‌ها عدد 1- ارسال شود."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_vault_info",
+            "description": "دریافت وضعیت و آمار سوپرگروه صندوق هوشمند سیو مسیج، لینک دسترسی و تعداد پیام‌های بایگانی‌شده در هر تاپیک.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "purge_vault",
+            "description": "پاک‌سازی و حذف پیام‌های داخل سوپرگروه صندوق هوشمند (Capri Vault). هر زمان کاربر گفت صندوق را پاک کن، خالی کن، پیام‌های صندوق رو پاکسازی کن، یا N پیام اخیر صندوق را پاک کن، از این ابزار استفاده کن. پارامتر limit تعداد پیام‌های حذفی است (برای پاک‌سازی کامل عدد 1-).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "تعداد پیام‌های اخیر برای حذف (مثلاً ۵۰). برای پاک‌سازی کامل صندوق عدد 1- ارسال شود."}
+                },
+                "required": []
+            }
+        }
+    }
+]
+
+
+def get_all_tool_definitions() -> list:
+    """Combine static native tools with dynamic runtime Hermes skills."""
+    from ai_engine import skills_manager
+    dynamic = skills_manager.get_skill_tool_definitions()
+    return TOOL_DEFINITIONS + dynamic
+
+
+async def execute_tool(name: str, args: dict, event, client, status=None) -> str:
+    """Execute dispatched tool and return stringified result to the ReAct agent."""
+    try:
+        if not getattr(event, "out", False) and name not in STRANGER_ALLOWED_TOOLS:
+            return "⛔ این قابلیت فقط برای صاحب اکانت فعال است."
+        if name == "web_search":
+            query = args.get("query", "").strip()
+            if not query:
+                return "خطا: عبارت جستجو خالی است."
+            # Query normalization and single fast search pass
+            fixed = (await asyncio.to_thread(ai._search_query, query) or query).strip()
+            if status:
+                await status.edit(f"🔍 در حال جستجوی سریع برای: «{fixed}»...")
+            results = await asyncio.to_thread(gsearch.web_search, fixed, 5)
+            if not results:
+                results = await asyncio.to_thread(gsearch.web_search, query, 5)
+            if not results:
+                return "هیچ نتیجه‌ای در جستجوی اینترنت یافت نشد."
+            return gsearch.format_search_results(results)
+
+        elif name == "search_channel_files":
+            query = args.get("query", "").strip()
+            kind = (args.get("kind", "") or "").strip().lower()
+            if not query:
+                return "خطا: عبارت جستجو مشخص نشده."
+            if status:
+                await status.edit(f"🔍 در حال جستجوی «{query}» در کانال‌ها...")
+            results = await search.find_files(client, query, limit=3, kind=kind)
+            if not results:
+                return f"هیچ فایلی با نام یا موضوع «{query}» در کانال‌ها پیدا نشد."
+            for r in results:
+                if r["kind"] == "text":
+                    await client.send_message(event.chat_id, r["text"])
+                elif kind == "music" and getattr(r["msg"], "media", None):
+                    # Re-upload audio track cleanly to strip forwarded origin channel metadata
+                    await client.send_file(event.chat_id, r["msg"].media, caption=r.get("name") or None)
+                else:
+                    await client.forward_messages(event.chat_id, r["msg"])
+                await asyncio.sleep(0.4)
+            if kind == "music":
+                return f"تعداد {len(results)} آهنگ یافت شد و ارسال شد (بدون نمایش منبع)."
+            return f"تعداد {len(results)} مورد یافت شد و مستقیماً از تلگرام فوروارد شد (بدون مصرف حجم)."
+
+        elif name == "search_music":
+            query = args.get("query", "").strip()
+            if not query:
+                return "خطا: نام آهنگ مشخص نشده است."
+
+            # Query Deezer Music Bot first; fallback to user channels if unavailable
+            if status:
+                await status.edit(f"🎵 در حال گرفتن آهنگ «{query}» از @DeezerMusicBot...")
+            try:
+                from services.media import deezer
+                dsent, derr = await deezer.fetch_music(client, query, event=event, status=status)
+            except Exception as e:
+                dsent, derr = 0, str(e)
+            if dsent:
+                return f"آهنگ «{query}» از @DeezerMusicBot گرفته شد و بدون کپشن/منبع ارسال شد."
+
+            if status:
+                await status.edit(f"🎵 Deezer جواب نداد ({derr})؛ دارم توی کانال‌ها می‌گردم: «{query}»...")
+            results = await search.find_files(client, query, limit=3, kind="music")
+            if not results:
+                return f"هیچ آهنگی با نام یا خواننده «{query}» پیدا نشد (نه در Deezer نه در کانال‌ها)."
+            sent = 0
+            for r in results:
+                m = r.get("msg")
+                if getattr(m, "media", None):
+                    try:
+                        await client.send_file(event.chat_id, m.media, caption=r.get("name") or None)
+                        sent += 1
+                        await asyncio.sleep(0.6)
+                    except Exception:
+                        continue
+            if not sent:
+                return f"آهنگی برای «{query}» پیدا شد ولی ارسالش ممکن نشد."
+            return f"تعداد {sent} آهنگ برای «{query}» پیدا و ارسال شد (بدون نمایش منبع)."
+
+        elif name == "search_in_channel":
+            chan = args.get("channel_name", "").strip()
+            query = args.get("query", "").strip()
+            kind = (args.get("kind", "") or "").strip().lower()
+            if not chan or not query:
+                return "خطا: نام کانال و عبارت جستجو الزامی است."
+            if status:
+                await status.edit(f"🔍 در حال جستجو در کانال «{chan}» برای «{query}»...")
+            dialogs = await channels.find_channels(client, chan)
+            if not dialogs:
+                return f"کانالی با نام «{chan}» در اکانت پیدا نشد."
+            target = dialogs[0]
+            results = await search.find_in_channel(client, target.entity, query, limit=5, kind=kind)
+            if not results:
+                return f"در کانال «{target.name}» موردی برای «{query}» پیدا نشد."
+            for r in results:
+                if r["kind"] == "text":
+                    await client.send_message(event.chat_id, r["text"])
+                elif kind == "music" and getattr(r["msg"], "media", None):
+                    await client.send_file(event.chat_id, r["msg"].media, caption=r.get("name") or None)
+                else:
+                    await client.forward_messages(event.chat_id, r["msg"])
+                await asyncio.sleep(0.4)
+            return f"تعداد {len(results)} مورد در کانال «{target.name}» پیدا شد و مستقیماً فوروارد شد."
+
+        elif name in ("fetch_and_forward_movie", "download_movie_or_file"):
+            target = args.get("target", "").strip()
+            quality = args.get("quality")
+            if not target:
+                return "خطا: عنوان یا لینک مشخص نشده."
+            from services.media import ytsummary
+            if ytsummary.extract_youtube_id(target):
+                from services.media import ytdownload
+                try:
+                    q_val = int(quality) if quality else 720
+                except Exception:
+                    q_val = 720
+                return await ytdownload.download_youtube_video(client, target, quality=q_val, event=event, status=status)
+            if status:
+                try:
+                    await status.edit(f"🎬 در حال بررسی و دریافت «{target}»...")
+                except Exception:
+                    pass
+            from services.media import media_flow
+            import bot
+            ok, res_msg = await media_flow.smart_fetch_media(client, event, status, target if not quality else f"{target} کیفیت {quality}", bot.pending)
+            return res_msg
+
+        elif name == "search_google_images":
+            query = args.get("query", "").strip()
+            count = int(args.get("count", 3) or 3)
+            count = max(1, min(count, 5))
+            if not query:
+                return "خطا: موضوع عکس مشخص نشده."
+            if status:
+                await status.edit(f"🖼 در حال جستجوی تصاویر «{query}»...")
+            import bot
+            msg_res = await bot.send_images(event, query, limit=count)
+            return f"نتیجه ارسال تصاویر: {msg_res}"
+
+        elif name == "manage_memory":
+            if not getattr(event, "out", False):
+                owner_str = f" ({config.OWNER_NAME})" if config.OWNER_NAME else ""
+                return f"خطای دسترسی: حافظه و قوانین دستیار فقط توسط صاحب اکانت{owner_str} قابل تغییر است و اشخاص دیگر اجازه تعیین قانون یا ذخیره حافظه را ندارند."
+            act = args.get("action", "")
+            fact = args.get("fact", "").strip()
+            if act == "add":
+                if not fact:
+                    return "خطا: متنی برای ذخیره داده نشد."
+                memory.add_memory(fact)
+                return f"واقعیت به حافظه بلندمدت اضافه شد: «{fact}»"
+            elif act == "remove":
+                if not fact:
+                    return "خطا: موضوع برای حذف مشخص نشده."
+                removed = memory.remove_memory(fact)
+                if removed:
+                    return f"از حافظه پاک شد: {', '.join(removed)}"
+                return "موردی شبیه این در حافظه نبود."
+            elif act == "list":
+                facts = memory.list_facts()
+                if not facts:
+                    return "حافظه در حال حاضر خالی است."
+                return "چیزهایی که در حافظه ثبت شده است:\n" + "\n".join(f"- {f}" for f in facts)
+            elif act == "clear":
+                import bot
+                bot.pending[str(event.chat_id)] = {"kind": "confirm_clear_memory"}
+                return "⚠️ آیا مطمئنید می‌خواهید کل حافظه ماندگار را پاک کنید؟ (بگویید «آره» یا «نه»)"
+            return "عملیات حافظه نامعتبر است."
+
+        elif name == "manage_channel_membership":
+            act = args.get("action", "")
+            target = args.get("target", "").strip()
+            if not target:
+                return "خطا: کانال هدف مشخص نشده است."
+            if act == "join":
+                if status:
+                    await status.edit(f"🔗 در حال عضویت در «{target}»...")
+                ok, err = await channels.join_channel(client, target)
+                return f"با موفقیت عضو شد به «{target}»." if ok else f"خطا در عضویت: {err}"
+            elif act == "leave":
+                if status:
+                    try:
+                        await status.edit(f"🚪 در حال بررسی کانال‌های «{target}»...")
+                    except Exception:
+                        pass
+                dialogs = await channels.find_channels(client, target)
+                if not dialogs:
+                    return f"کانالی با نام «{target}» پیدا نشد."
+                import bot
+                chat_key = str(event.chat_id)
+                if len(dialogs) == 1:
+                    bot.pending[chat_key] = {"kind": "confirm_leave_single", "dialog": dialogs[0], "name": dialogs[0].name}
+                    return f"⚠️ برای خروج از کانال «{dialogs[0].name}»، لطفاً تایید کنید. (بگویید «آره» یا «نه»)"
+                else:
+                    names = "\n".join(f"{i + 1}. {d.name}" for i, d in enumerate(dialogs))
+                    bot.pending[chat_key] = {"kind": "leave", "dialogs": dialogs}
+                    return f"این کانال‌ها را پیدا کردم:\n{names}\n\nکدام را لفت بزنم؟ بگویید «همه» یا شماره‌ها (مثلاً 1، 3)."
+            return "عملیات عضویت نامعتبر است."
+
+        elif name == "manage_folders":
+            act = args.get("action", "")
+            fname = args.get("folder_name", "").strip()
+            cname = args.get("channel_name", "").strip()
+            folds = await folders.list_folders(client)
+            if act == "list":
+                if not folds:
+                    return "هنوز هیچ پوشه‌ای در اکانت تلگرام ساخته نشده است."
+                return "پوشه‌های موجود در اکانت:\n" + "\n".join(f"- {f['title']}" for f in folds)
+            elif act == "delete":
+                f = folders.find_folder(folds, fname)
+                if not f:
+                    return f"پوشه‌ای با نام «{fname}» پیدا نشد."
+                import bot
+                bot.pending[str(event.chat_id)] = {"kind": "confirm_delete_folder", "folder_id": f, "name": f['title']}
+                return f"⚠️ برای حذف پوشه «{f['title']}»، لطفاً تایید کنید. (بگویید «آره» یا «نه»)"
+            elif act == "create" or act == "assign":
+                if not fname:
+                    return "خطا: نام پوشه مشخص نشده."
+                dialogs = await channels.find_channels(client, cname) if cname else []
+                if not dialogs:
+                    return f"کانالی به نام «{cname}» برای قراردادن در پوشه پیدا نشد (تلگرام پوشه خالی قبول نمی‌کند)."
+                f = folders.find_folder(folds, fname)
+                if f is None:
+                    f, err = await folders.create_folder(client, fname, [d.entity for d in dialogs])
+                    if err:
+                        return f"خطا در ساخت پوشه: {err}"
+                    return f"پوشه «{f['title']}» ساخته شد و {len(dialogs)} کانال درون آن قرار گرفت."
+                n = await folders.assign_to_folder(client, f, [d.entity for d in dialogs])
+                return f"{n} کانال با موفقیت به پوشه «{f['title']}» اضافه شد."
+            elif act == "auto_sort":
+                import bot
+                await bot._do_sort(event, status)
+                return "__PENDING_SORT__"
+            return "عملیات پوشه نامعتبر است."
+
+        elif name == "manage_important_channels":
+            act = args.get("action", "")
+            cname = args.get("channel_name", "").strip()
+            if act == "list":
+                names = briefing.load_important()
+                if not names:
+                    return "هنوز کانال مهمی ثبت نشده است."
+                return "کانال‌های مهم ثبت‌شده برای خلاصه روزانه:\n" + "\n".join(f"- {n}" for n in names)
+            elif act == "add":
+                if not cname:
+                    return "خطا: نام کانال مشخص نشده است."
+                ent_name = None
+                if cname.startswith("@") or "t.me/" in cname:
+                    try:
+                        ent = await client.get_entity(cname)
+                        ent_name = getattr(ent, "title", None) or getattr(ent, "username", None) or cname
+                    except Exception:
+                        pass
+                if not ent_name:
+                    dialogs = await channels.find_channels(client, cname, limit=50)
+                    if dialogs:
+                        ent_name = dialogs[0].name
+                if not ent_name:
+                    ent_name = cname
+                briefing.add_important(ent_name)
+                return f"⭐ کانال «{ent_name}» به لیست کانال‌های مهم اضافه شد و در خلاصه روزانه می‌آید."
+            elif act == "remove":
+                if not cname:
+                    return "خطا: نام کانال مشخص نشده است."
+                names = briefing.load_important()
+                pn = channels._norm(cname)
+                matches = [n for n in names if pn in channels._norm(n) or channels._norm(n) in pn]
+                if not matches:
+                    return f"«{cname}» در لیست کانال‌های مهم نبود."
+                briefing.remove_important(matches[0])
+                return f"🗑 «{matches[0]}» از لیست کانال‌های مهم برداشته شد."
+            return "عملیات نامعتبر است."
+
+        elif name == "ask_clarification":
+            q_text = args.get("question", "").strip()
+            if not q_text:
+                q_text = "می‌شه دقیق‌تر بگی منظورت چیه تا بتونم کمکت کنم؟"
+            return f"__ASK_USER__:{q_text}"
+
+        elif name == "get_daily_briefing":
+            if status:
+                await status.edit("☀️ در حال گردآوری و تحلیل خلاصه روزانه...")
+            report = await briefing.build_briefing(client)
+            return report
+
+        elif name == "get_current_datetime":
+            return f"امروز {ai._today()} است."
+
+        elif name == "read_webpage":
+            url = args.get("url", "").strip()
+            if not url:
+                return "خطا: آدرس لینک مشخص نشده است."
+            if status:
+                await status.edit("🌐 در حال باز کردن و مطالعه لینک صفحه وب...")
+            from services.search import webreader
+            data = await asyncio.to_thread(webreader.fetch_url, url)
+            if data.get("error"):
+                return f"خطا در باز کردن صفحه وب ({url}): {data['error']}"
+            title = data.get("title", "")
+            content = data.get("content", "")
+            if not content:
+                return f"صفحه باز شد اما متن قابل استخراجی نداشت: {title}"
+            return f"عنوان صفحه: {title}\nآدرس: {url}\n\nمتن محتوای صفحه:\n{content}"
+
+        elif name == "summarize_youtube_video":
+            url = args.get("url", "").strip()
+            if not url:
+                return "خطا: آدرس یا لینک یوتیوب مشخص نشده است."
+            if status:
+                try:
+                    await status.edit("🎬 در حال دریافت اطلاعات و خلاصه‌سازی ویدیو یوتیوب بدون مصرف حجم...")
+                except Exception:
+                    pass
+            from services.media import ytsummary
+            summary = await asyncio.to_thread(ytsummary.summarize_youtube_video, url)
+            return summary
+
+        elif name == "download_youtube_video":
+            url = args.get("url", "").strip()
+            quality = args.get("quality")
+            if not url:
+                return "خطا: آدرس یا لینک ویدیوی یوتیوب مشخص نشده است."
+            try:
+                m_q = re.search(r"\d+", str(quality)) if quality else None
+                q_val = int(m_q.group(0)) if m_q else 720
+            except Exception:
+                q_val = 720
+            from services.media import ytdownload
+            return await ytdownload.download_youtube_video(client, url, quality=q_val, event=event, status=status)
+
+        elif name == "send_voice_note":
+            text = args.get("text", "").strip()
+            if not text:
+                return "خطا: متن ویس مشخص نشده است."
+            if status:
+                try:
+                    await status.edit("🎙 در حال ضبط ویس...")
+                except Exception:
+                    pass
+            import os
+            import time
+            from services.voice import voice
+            os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
+            ts = int(time.time() * 1000)
+            mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
+            ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
+            ok = await voice.speak(text, mp3)
+            if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
+                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
+                import bot
+                bot.self_sent.add(vmsg.id)
+                try:
+                    os.remove(mp3)
+                    os.remove(ogg)
+                except Exception:
+                    pass
+                if status:
+                    try:
+                        await status.delete()
+                    except Exception:
+                        pass
+                return f"__VOICE_SENT__:{text}"
+            return "متأسفانه امکان ارسال ویس در این لحظه میسر نشد."
+
+        elif name == "create_or_update_skill":
+            if not getattr(event, "out", False):
+                owner_str = f" ({config.OWNER_NAME})" if config.OWNER_NAME else ""
+                return f"خطای دسترسی: ساخت و تغییر اسکیل‌ها فقط مختص صاحب اکانت{owner_str} است."
+            from ai_engine import skills_manager
+            s_name = args.get("name", "")
+            desc = args.get("description", "")
+            params = args.get("parameters") or {"type": "object", "properties": {}}
+            code = args.get("python_code", "")
+
+            err = skills_manager.validate_skill(s_name, code)
+            if err:
+                return f"❌ {err}"
+
+            import bot
+            preview_code = code if len(code) <= 3500 else code[:3500] + "\n\n... (کد طولانی‌تر است؛ نسخه کامل پس از تایید ذخیره می‌شود)"
+            preview = (
+                f"🛠 **اسکیل پیشنهادی «{s_name}»**\n"
+                f"▫️ توضیح: {desc or '—'}\n\n"
+                f"```python\n{preview_code}\n```\n\n"
+                f"ساخته و ثبت بشه؟ بگو «آره» یا «نه»."
+            )
+            sent_m = await client.send_message(event.chat_id, preview)
+            bot.self_sent.add(sent_m.id)
+
+            bot.pending[str(event.chat_id)] = {
+                "kind": "confirm_skill",
+                "name": s_name,
+                "description": desc,
+                "parameters": params,
+                "python_code": code,
+            }
+            return "__PENDING_SKILL__"
+
+        elif name == "list_skills":
+            from ai_engine import skills_manager
+            all_s = skills_manager.get_all_skills()
+            if not all_s:
+                return "هنوز هیچ اسکیل داینامیکی در سیستم ثبت نشده است."
+            lines = ["🛠 **اسکیل‌ها و مهارت‌های داینامیک ثبت‌شده کاپری:**"]
+            for k, v in all_s.items():
+                lines.append(f"• **{k}**: {v.get('description', '')}")
+            return "\n".join(lines)
+
+        elif name == "delete_skill":
+            from ai_engine import skills_manager
+            s_name = args.get("name", "")
+            return skills_manager.delete_skill(s_name)
+
+        elif name == "draft_and_send_message":
+            from services.social import drafter
+            import time
+            target_str = args.get("target_contact", "").strip()
+            intent = args.get("message_intent", "").strip()
+            tone = args.get("tone", "صمیمی و محترمانه").strip()
+
+            if status:
+                try:
+                    await status.edit("✍️ در حال جستجوی مخاطب و تنظیم پیش‌نویس پیام...")
+                except Exception:
+                    pass
+
+            target_entity, target_name = await drafter.resolve_target(client, event, target_str)
+            if not target_entity:
+                return f"❌ مخاطبی با نام یا مشخصات «{target_str}» در چت‌ها و مخاطبین تلگرام یافت نشد."
+
+            draft_text = await drafter.craft_message(target_name, intent, tone)
+            msg_preview = (
+                f"✍️ **پیش‌نویس پیام برای «{target_name}»:**\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"«{draft_text}»\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"اگر تایید می‌کنی، روی این پیام ریپلای بزن و بگو «بفرست» (برای لغو بگو «لغو»)."
+            )
+            preview_id = None
+            if status:
+                try:
+                    await status.edit(msg_preview)
+                    preview_id = status.id
+                except Exception:
+                    pass
+            if not preview_id:
+                sent_m = await client.send_message(event.chat_id, msg_preview)
+                preview_id = sent_m.id
+
+            drafter.set_pending_draft(event.chat_id, preview_id, target_entity, target_name, draft_text)
+            return f"__DRAFT_SENT__:{target_name}"
+
+        elif name == "roast_target":
+            from services.social import roast
+            style = args.get("style", "سنگین و دندان‌شکن")
+            ok = await roast.handle_roast(client, event, style, status)
+            if ok:
+                return "__ROAST_SENT__"
+            return "روست ارسال نشد؛ مطمئن شو روی پیام طرف ریپلای زدی."
+
+        elif name == "vibe_check":
+            from services.social import vibecheck
+            q = args.get("question", "تحلیل وایب چت و نیت طرف")
+            report = await vibecheck.analyze_chat_vibe(client, event, q)
+            return report
+
+        elif name == "generate_meme":
+            from services.social import memegen
+            cap = args.get("caption", "")
+            ok = await memegen.handle_meme(client, event, cap, status)
+            if ok:
+                return "__MEME_SENT__"
+            return "تولید میم انجام نشد؛ مطمئن شو روی پیام یا عکس طرف ریپلای زدی."
+
+        elif name == "manage_dnd":
+            if not getattr(event, "out", False):
+                return "خطای دسترسی: تغییر حالت سرشلوغ (DND) فقط توسط صاحب اکانت مجاز است."
+            from services.social import dnd
+            act = args.get("action", "status")
+            if act == "disable":
+                dnd.deactivate_dnd()
+                return "حالت سرشلوغ (DND) خاموش شد و کاپری به حالت عادی بازگشت."
+            elif act == "status":
+                info = dnd.get_dnd_info()
+                if dnd.is_dnd_active():
+                    return f"حالت DND فعال است. علت: {info.get('reason')}، تا: {info.get('until_str')}، پاسخ‌های خودکار: {info.get('replies_count')}"
+                return "حالت DND غیرفعال است."
+            elif act == "enable":
+                reason = args.get("reason", "مشغله شخصی")
+                time_expr = args.get("duration_or_time", "")
+                target_dt, until_str = dnd.parse_time_expression(time_expr) if time_expr else (None, "")
+                until_ts = target_dt.timestamp() if target_dt else None
+                dnd.activate_dnd(reason, until_ts=until_ts, until_str=until_str)
+                return f"حالت سرشلوغ (DND) با موفقیت فعال شد. علت: {reason}، مدت اعتبار: {until_str or 'تا اعلام لغو توسط شما'}."
+
+        elif name == "manage_reminders":
+            if not getattr(event, "out", False):
+                return "خطای دسترسی: مدیریت یادآورها فقط توسط صاحب اکانت مجاز است."
+            from services.social import dnd
+            act = str(args.get("action", "list")).strip().lower()
+            if act in ("clear", "delete", "remove", "cancel"):
+                rems = dnd.load_reminders()
+                if not rems:
+                    return "هیچ یادآور فعالی در صف وجود ندارد."
+                idx = args.get("index")
+                if idx is not None:
+                    try:
+                        idx_num = int(idx)
+                        if 1 <= idx_num <= len(rems):
+                            target = rems[idx_num - 1]
+                            dnd.remove_reminder(target.get("id"))
+                            return f"یادآور شماره {idx_num} با موفقیت پاک شد: {target.get('text')}"
+                    except Exception:
+                        pass
+                cnt = dnd.clear_all_reminders()
+                return f"تمام یادآورهای فعال ({cnt} مورد) با موفقیت پاک شدند."
+            elif act == "list":
+                rems = dnd.load_reminders()
+                if not rems:
+                    return "هیچ یادآور فعالی در صف وجود ندارد."
+                return "یادآورهای فعال:\n" + "\n".join(f"{idx}. {r['text']} (زمان: {r['due_str']})" for idx, r in enumerate(rems, start=1))
+            elif act == "add":
+                rem_text = args.get("text", "").strip()
+                time_expr = args.get("time_expression", "").strip()
+                if not rem_text or not time_expr:
+                    return "خطا: موضوع و زمان یادآوری باید مشخص باشد."
+                target_dt, due_str = dnd.parse_time_expression(time_expr)
+                if not target_dt:
+                    return "خطا: فرمت زمان یادآوری نامفهوم بود."
+                dnd.add_reminder(rem_text, target_dt.timestamp(), due_str)
+                return f"یادآور با موفقیت ثبت شد: «{rem_text}» برای {due_str}."
+
+        elif name == "organize_saved_messages":
+            if not getattr(event, "out", False):
+                return "⛔ عدم دسترسی: سازمان‌دهی صندوق سیو مسیج فقط توسط مالک ربات مجاز است."
+            from services.telegram import vault
+            raw_limit = args.get("limit", 20)
+            try:
+                limit = int(raw_limit)
+            except (ValueError, TypeError):
+                limit = 20
+
+            async def _cb(t):
+                if status:
+                    try:
+                        await status.edit(t)
+                    except Exception:
+                        pass
+
+            rep = await vault.organize_saved_messages(client, limit=limit, status_callback=_cb)
+            total = rep.get("total", 0)
+            if total == 0:
+                return rep.get("message", "هیچ پیامی برای سازمان‌دهی در سیو مسیج یافت نشد.")
+            topics_summary = "\n".join(f"- {t}: {c} پیام" for t, c in rep.get("by_topic", {}).items())
+            link = rep.get("vault_link", "")
+            link_txt = f"\nلینک گروه: {link}" if link else ""
+            return f"سازمان‌دهی با موفقیت انجام شد. مجموع {total} پیام در تاپیک‌های زیر دسته‌بندی شدند:\n{topics_summary}{link_txt}"
+
+        elif name == "get_vault_info":
+            if not getattr(event, "out", False):
+                return "⛔ عدم دسترسی: مشاهده اطلاعات صندوق فقط توسط مالک ربات مجاز است."
+            from services.telegram import vault
+            info = vault.get_vault_info()
+            gid = info.get("group_id")
+            if not gid:
+                return "هنوز صندوق هوشمند ایجاد نشده است."
+            total = info.get("total_organized_count", 0)
+            topics = info.get("topics", {})
+            link = info.get("group_invite_link", "")
+            topics_str = ", ".join(t.get("title", k) for k, t in topics.items()) if topics else "بدون تاپیک"
+            return f"صندوق هوشمند فعال است. شناسه گروه: {gid} | کل پیام‌های سازمان‌دهی شده: {total} | تاپیک‌ها: {topics_str} | لینک: {link or 'نامشخص'}"
+
+        elif name == "purge_vault":
+            if not getattr(event, "out", False):
+                return "⛔ این قابلیت فقط برای صاحب اکانت فعال است."
+            from services.telegram import vault
+            raw_limit = args.get("limit", -1)
+            try:
+                limit = int(raw_limit)
+            except (ValueError, TypeError):
+                limit = -1
+
+            async def _cb(t):
+                if status:
+                    try:
+                        await status.edit(t)
+                    except Exception:
+                        pass
+
+            res = await vault.purge_vault_messages(client, limit=limit, status_callback=_cb)
+            return f"پاک‌سازی صندوق انجام شد: {res.get('message', '')}"
+
+        # Execute runtime dynamic Hermes skill
+        from ai_engine import skills_manager
+        if name in skills_manager.get_all_skills():
+            if status:
+                try:
+                    await status.edit(f"⚙️ در حال اجرای اسکیل «{name}»...")
+                except Exception:
+                    pass
+            return await skills_manager.execute_skill(name, args, client, event)
+
+        return f"ابزار ناشناخته: {name}"
+    except Exception as e:
+        return f"خطا در اجرای ابزار {name}: {e}"

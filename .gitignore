@@ -1,0 +1,27 @@
+.env
+*.session
+*.session-journal
+__pycache__/
+venv/
+.venv/
+private_backups/
+scratch/
+
+# Runtime data & memory
+downloads/*
+!downloads/.gitkeep
+settings.json
+cognitive_memory.json
+memory.json
+important.json
+paid_bots.json
+cache.json
+vault.json
+dnd.json
+reminders.json
+ghost.json
+access.json
+custom_skills/
+
+# Logs & temp
+*.log

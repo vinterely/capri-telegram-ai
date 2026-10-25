@@ -1,0 +1,13 @@
+telethon>=1.36,<2.0
+google-genai>=1.0,<2.0
+python-dotenv>=1.0,<2.0
+jdatetime>=5.0,<6.0
+httpx[socksio]>=0.27,<1.0
+requests>=2.31,<3.0
+PySocks>=1.7,<2.0
+edge-tts>=6.1,<8.0
+yt-dlp>=2024.0
+pillow>=10.0,<13.0
+arabic-reshaper>=3.0,<4.0
+python-bidi>=0.4,<1.0
+tzdata>=2024.1

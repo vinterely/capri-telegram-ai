@@ -1,0 +1,14 @@
+services:
+  capri:
+    build: .
+    container_name: capri_userbot
+    restart: unless-stopped
+    volumes:
+      - ./.env:/app/.env
+      - ./session.session:/app/session.session
+      - ./downloads:/app/downloads
+      - ./custom_skills:/app/custom_skills
+      - ./access.json:/app/access.json
+      - ./settings.json:/app/settings.json
+    environment:
+      - PYTHONUNBUFFERED=1
