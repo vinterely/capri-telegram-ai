@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import os
 import re
 
 import httpx
 
 from core import config
+
+log = logging.getLogger("voice")
 
 GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 TTS_VOICE = os.getenv("TTS_VOICE", "fa-IR-FaridNeural").strip()
@@ -122,7 +125,7 @@ async def speak_gemini(clean_text: str, out_path: str, voice_name: str = None) -
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 return True
     except Exception as e:
-        logger.warning(f"Gemini TTS generation failed ({e}), falling back to Edge-TTS...")
+        log.warning(f"Gemini TTS generation failed ({e}), falling back to Edge-TTS...")
 
     # فال‌بک خودکار به Microsoft Edge-TTS در صورت محدودیت سهمیه (429) یا خطای شبکه
     try:
@@ -132,7 +135,7 @@ async def speak_gemini(clean_text: str, out_path: str, voice_name: str = None) -
         await c.save(out_path)
         return os.path.exists(out_path) and os.path.getsize(out_path) > 0
     except Exception as fb_err:
-        logger.error(f"Fallback Edge-TTS also failed: {fb_err}")
+        log.error(f"Fallback Edge-TTS also failed: {fb_err}")
         return False
 
 

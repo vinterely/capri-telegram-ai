@@ -1,4 +1,4 @@
-# 📘 Capri AI Userbot [v1.5.0] - Comprehensive Setup Tutorial
+# 📘 Capri AI Userbot [v1.6.0] - Comprehensive Setup Tutorial
 
 Welcome to the definitive setup tutorial for **Capri**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
 
@@ -14,7 +14,7 @@ This tutorial guides you from a blank machine to a fully running, production-rea
 5. [🧙 Method 2: The Interactive Python Wizard (start.py)](#5--method-2-the-interactive-python-wizard-startpy)
 6. [🐳 Method 3: Docker Deployment (Recommended for Servers/VPS)](#6--method-3-docker-deployment-recommended-for-serversvps)
 7. [🛠️ Method 4: Manual Terminal Setup](#7-️-method-4-manual-terminal-setup)
-8. [Step 4: Testing Key Commands & Features (v1.5.0)](#8-step-4-testing-key-commands--features-v150)
+8. [Step 4: Testing Key Commands & Features (v1.6.0)](#8-step-4-testing-key-commands--features-v160)
 9. [Step 5: Production 24/7 Daemon Execution](#9-step-5-production-247-daemon-execution)
 10. [Troubleshooting & FAQ](#10-troubleshooting--faq)
 
@@ -224,7 +224,7 @@ python bot.py
 
 ---
 
-## 8. Step 4: Testing Key Commands & Features (v1.5.0)
+## 8. Step 4: Testing Key Commands & Features (v1.6.0)
 
 Open Telegram on your phone or desktop and test Capri in **Saved Messages** or any chat:
 

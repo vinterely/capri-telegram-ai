@@ -18,19 +18,44 @@ _PERSIAN_DIGITS = {
     '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
     '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9'
 }
+ 
+BACK_BUTTON_HINTS = (
+    "برگشت", "بازگشت", "منوی قبل", "صفحه قبل", "منوی اصلی",
+    "back", "return", "main menu", "🔙", "⬅️", "◀️", "↩️"
+)
+
+
+def is_back_button(text: str) -> bool:
+    """تشخیص آیا دکمه از نوع بازگشت/منوی اصلی/عقبگرد است یا خیر."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    # اگر آیکون‌های بازگشت وجود دارد
+    if any(icon in t for icon in ("🔙", "⬅️", "◀️", "↩️")):
+        return True
+    exact_hints = ("برگشت", "بازگشت", "منوی قبل", "صفحه قبل", "منوی اصلی", "back", "return", "main menu")
+    if t in exact_hints or any(t == f"[{h}]" for h in exact_hints):
+        return True
+    if any(h in t for h in ("منوی قبل", "صفحه قبل", "منوی اصلی", "بازگشت به منو", "برگشت به منو", "بازگشت به منوی قبل")):
+        return True
+    if any(h in t for h in ("برگشت", "بازگشت", "back")) and len(t) <= 15:
+        if not any(k in t for k in ("فیلم", "قسمت", "فصل", "دانلود", "کیفیت", "1080", "720", "480", "series", "movie")):
+            return True
+    return False
+
 
 NAV_SYSTEM_PROMPT = (
     "تو یک موتور فوق‌هوشمند ناوبری دکمه‌های شیشه‌ای (Inline Buttons) در ربات‌های تلگرام برای دانلود فیلم و سریال هستی.\n"
     "وظیفه تو این است که با بررسی متن پیام ربات، درخواست کاربر، وضعیت فایل‌های دریافت شده و فهرست دکمه‌های موجود، "
-    "دقیقاً مشخص کنی کدام دکمه باید کلیک شود.\n\n"
-    "قوانین تصمیم‌گیری:\n"
-    "۱. اگر دکمه‌های ورود به دانلود، منوی اصلی یا تایید وجود دارد، دکمه مرتبط با شروع/دانلود را انتخاب کن.\n"
-    "۲. اگر منوی انتخاب فصل است، دکمه فصل درخواستی کاربر را انتخاب کن (اگر کاربر فصل نگفته، فصل اول یا جدیدترین فصل بسته به متن).\n"
-    "۳. اگر منوی انتخاب کیفیت است، نزدیک‌ترین کیفیت به کیفیت درخواستی (مثلاً 720p یا 1080p) را انتخاب کن.\n"
-    "۴. اگر منوی انتخاب نسخه دوبله یا زیرنویس است، طبق درخواست کاربر انتخاب کن.\n"
-    "۵. اگر دکمه «دریافت فایل» یا دکمه شماره قسمت موردنظر کاربر وجود دارد و فایل آن هنوز دریافت نشده، آن را انتخاب کن.\n"
-    "۶. اگر کاربر کل فصل یا همه قسمت‌ها را خواسته و فایل قسمت جاری دریافت شده، دکمه «بعدی» یا «Next» یا قسمت بعدی را انتخاب کن.\n"
-    "۷. اگر تمام قسمت‌های درخواستی دریافت شده‌اند یا هیچ دکمه مرتبطی وجود ندارد، عدد 0 بنویس.\n\n"
+    "دقیقاً مشخص کنی کدام دکمه باید کلیک شود تا فایل به دست کاربر برسد.\n\n"
+    "قوانین اکید تصمیم‌گیری:\n"
+    "۱. ممنوعیت دکمه برگشت: هرگز دکمه‌های «برگشت»، «بازگشت»، «منوی قبل»، «منوی اصلی»، «Back» یا آیکون‌های 🔙 و ⬅️ را انتخاب نکن! هدف تو پیشروی به سمت دانلود است نه عقبگرد.\n"
+    "۲. انتخاب نسخه صوت/زیرنویس: اگر کاربر زیرنویس خواسته است (subtitled)، دکمه زیرنویس (زیرنویس چسبیده / SoftSub / HardSub / زیرنویس) را انتخاب کن و هرگز دوبله را انتخاب نکن. اگر کاربر دوبله خواسته، دکمه دوبله را انتخاب کن.\n"
+    "۳. انتخاب کیفیت: اگر منو شامل کیفیت‌ها است، دکمه دقیقاً مطابق با کیفیت درخواستی کاربر (مثلاً 480p یا 720p یا 1080p) را انتخاب کن. هرگز روی منوی کیفیت دکمه برگشت نزن!\n"
+    "۴. انتخاب فصل و قسمت: اگر منوی انتخاب فصل است، فصل خواسته شده را انتخاب کن. اگر منوی قسمت‌ها است، قسمت مورد نظر کاربر را انتخاب کن.\n"
+    "۵. دریافت فایل: اگر دکمه «دریافت فایل»، «دانلود»، «Download» یا لینک دانلود مستقیم وجود دارد، آن را انتخاب کن.\n"
+    "۶. اگر کل فصل خواسته شده و قسمت فعلی دریافت شده، دکمه «بعدی» یا «Next» را بزن.\n"
+    "۷. اتمام: فقط زمانی عدد 0 را بفرست که تمام فایل‌های درخواستی دریافت شده باشند یا واقعاً هیچ گزینه‌ای برای دانلود باقی نمانده باشد.\n\n"
     "خروجی: فقط و فقط یک عدد (شماره گزینه مثلاً 1 یا 2 یا 0 برای اتمام) بدون هیچ متن، توضیح یا کلمه اضافه."
 )
 
@@ -85,12 +110,31 @@ def pick_button_sync(
     if len(buttons) == 1:
         return 0
 
-    numbered_buttons = format_buttons_list(buttons)
+    # تفکیک دکمه‌های رو به جلو از دکمه‌های بازگشت/منوی قبل
+    forward_candidates = [
+        (orig_idx, b) for orig_idx, b in enumerate(buttons)
+        if not is_back_button(getattr(b, "text", ""))
+    ]
+    if forward_candidates:
+        active_candidates = forward_candidates
+    else:
+        active_candidates = list(enumerate(buttons))
+
+    cand_buttons = [b for _, b in active_candidates]
+    numbered_buttons = format_buttons_list(cand_buttons)
+
     title = req.get("title") or "فیلم / سریال"
     season = req.get("season")
     episode = req.get("episode")
     quality = req.get("quality") or 720
-    audio = req.get("audio") or "دوبله یا زیرنویس"
+    audio_req = req.get("audio")
+
+    if audio_req == "subtitled":
+        audio_str = "زیرنویس (فقط زیرنویس فارسی / Subtitled انتخاب شود)"
+    elif audio_req == "dubbed":
+        audio_str = "دوبله (فقط نسخه دوبله فارسی / Dubbed انتخاب شود)"
+    else:
+        audio_str = audio_req or "دوبله یا زیرنویس"
 
     s_str = f"فصل {season}" if season else "مشخص نشده (اولین یا جدیدترین)"
     ep_str = "تمام قسمت‌ها (کل فصل)" if episode == "all" else (f"قسمت {episode}" if episode else "تمام قسمت‌ها / نامشخص")
@@ -105,7 +149,7 @@ def pick_button_sync(
         f"- فصل: {s_str}\n"
         f"- قسمت: {ep_str}\n"
         f"- کیفیت: {quality}p\n"
-        f"- نسخه: {audio}\n\n"
+        f"- نسخه: {audio_str}\n\n"
         f"وضعیت فعلی:\n"
         f"- تعداد فایل‌های دریافت شده تا اکنون: {files_count}\n"
         f"- آخرین اقدام: {last_action}\n\n"
@@ -120,9 +164,14 @@ def pick_button_sync(
         log.warning(f"Error in ai_nav ask_direct: {e}")
         raw = ""
 
-    choice = parse_choice(raw, buttons)
-    log.info(f"[ai_nav] Model response: {raw!r} -> Choice index: {choice}")
-    return choice
+    sub_choice = parse_choice(raw, cand_buttons)
+    if sub_choice is not None and 0 <= sub_choice < len(active_candidates):
+        orig_choice = active_candidates[sub_choice][0]
+    else:
+        orig_choice = None
+
+    log.info(f"[ai_nav] Model response: {raw!r} -> Choice index: {orig_choice}")
+    return orig_choice
 
 
 async def ai_pick_button(

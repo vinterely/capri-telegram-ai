@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
@@ -37,6 +37,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 HOOSHIA_API_KEY = os.getenv("HOOSHIA_API_KEY", "").strip()
 INCEPTION_API_KEY = os.getenv("INCEPTION_API_KEY", "").strip()
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
+ALLOW_SKILL_CREATION = os.getenv("ALLOW_SKILL_CREATION", "0").strip() == "1"
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 SESSION_FILE = os.path.join(BASE_DIR, "session")
 PROXY_TYPE = os.getenv("PROXY_TYPE", "").strip().lower()

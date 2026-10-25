@@ -22,7 +22,49 @@ os.makedirs(SKILLS_DIR, exist_ok=True)
 
 # ساخت اسکیل جدید توسط هوش مصنوعی به‌صورت پیش‌فرض خاموش است. روشن کردن: ALLOW_SKILL_CREATION=1 در .env
 ALLOW_SKILL_CREATION = os.getenv("ALLOW_SKILL_CREATION", "0").strip() == "1"
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,32}$")
+
+INTEGRITY_FILE = os.path.join(config.BASE_DIR, "core", "skills_integrity.json")
+
+
+def is_skill_creation_allowed() -> bool:
+    """بررسی فعال بودن امکان ساخت یا تغییر اسکیل‌ها."""
+    from core import config as _cfg
+    if getattr(_cfg, "ALLOW_SKILL_CREATION", False):
+        return True
+    return os.getenv("ALLOW_SKILL_CREATION", "0").strip() == "1"
+
+
+def _calc_file_sha256(path: str) -> str:
+    """محاسبه هش امن SHA-256 فایل."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            while chunk := f.read(8192):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _load_integrity() -> Dict[str, str]:
+    if not os.path.exists(INTEGRITY_FILE):
+        return {}
+    try:
+        with open(INTEGRITY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        log.warning(f"Failed to read skills integrity: {e}")
+        return {}
+
+
+def _save_integrity(hashes: Dict[str, str]) -> None:
+    try:
+        from core import fsutil
+        fsutil.atomic_write_json(INTEGRITY_FILE, hashes)
+    except Exception as e:
+        log.error(f"Failed to save skills integrity: {e}")
 
 # سقف زمان اجرای اسکیل‌های داینامیک (ثانیه)
 SKILL_TIMEOUT = 60
@@ -80,14 +122,14 @@ def _validate_skill_code(python_code: str) -> str:
 
 def validate_skill(name: str, python_code: str) -> str:
     """پیش‌اعتبارسنجی نام و کد اسکیل بدون نوشتن روی دیسک. خروجی خالی یعنی معتبر."""
-    if not ALLOW_SKILL_CREATION:
-        return "ساخت اسکیل جدید غیرفعال است. (برای فعال‌سازی توسط صاحب: ALLOW_SKILL_CREATION=1 در فایل .env)"
+    if not is_skill_creation_allowed():
+        return "ساخت یا ویرایش اسکیل غیرفعال است. (ALLOW_SKILL_CREATION=0)"
     name = name.strip().lower()
     if not _NAME_RE.match(name):
-        return f"نام اسکیل «{name}» باید انگلیسی کوچک، عدد و آندرلاین باشد (۲ تا ۴۱ کاراکتر، شروع با حرف)."
+        return f"نام اسکیل «{name}» باید انگلیسی کوچک، عدد و آندرلاین باشد (۳ تا ۳۳ کاراکتر، شروع با حرف انگلیسی)."
     from ai_engine import tools as _tools
     if name in {d["function"]["name"] for d in _tools.TOOL_DEFINITIONS}:
-        return f"نام «{name}» با یکی از ابزارهای اصلی تداخل دارد؛ نام دیگری انتخاب کن."
+        return f"نام «{name}» با یکی از ابزارهای اصلی سیستم تداخل دارد؛ نام دیگری انتخاب کن."
     return _validate_skill_code(python_code)
 
 
@@ -122,7 +164,7 @@ _cached_definitions: List[Dict[str, Any]] = []
 
 
 def get_skill_tool_definitions() -> List[Dict[str, Any]]:
-    """تبدیل تمام اسکیل‌های ذخیره‌شده به فرمت استاندارد ابزارهای OpenAI / Function Calling با کش mtime."""
+    """تبدیل اسکیل‌های معتبر و دارای صحت هش به فرمت استاندارد ابزارها با کش mtime."""
     global _cached_mtime, _cached_definitions
     try:
         mtime = os.path.getmtime(REGISTRY_FILE) if os.path.exists(REGISTRY_FILE) else 0
@@ -133,8 +175,18 @@ def get_skill_tool_definitions() -> List[Dict[str, Any]]:
         return _cached_definitions
 
     registry = _load_registry()
+    integrity = _load_integrity()
     definitions = []
     for name, skill in registry.items():
+        file_path = _skill_path(name)
+        expected_sha = integrity.get(name)
+        if not expected_sha or not os.path.exists(file_path):
+            continue
+        actual_sha = _calc_file_sha256(file_path)
+        if actual_sha != expected_sha:
+            log.warning("Skill '%s' skipped from definitions due to integrity mismatch.", name)
+            continue
+
         definitions.append({
             "type": "function",
             "function": {
@@ -152,11 +204,10 @@ def get_skill_tool_definitions() -> List[Dict[str, Any]]:
 
 
 def create_or_update_skill(name: str, description: str, parameters: dict, python_code: str) -> str:
-    """
-    ساخت یا ارتقای یک اسکیل پایتونی جدید به صورت خودکار توسط هوش مصنوعی.
-    کد پایتون باید یک تابع آسنکرون به صورت زیر داشته باشد:
-    async def execute(args: dict, client, event) -> str:
-    """
+    """ساخت یا ارتقای یک اسکیل پایتونی جدید با کنترل سطح دسترسی و محاسبه هش امن."""
+    if not is_skill_creation_allowed():
+        return "❌ ساخت یا ویرایش اسکیل غیرفعال است (ALLOW_SKILL_CREATION=0)."
+
     err = validate_skill(name, python_code)
     if err:
         return f"❌ {err}"
@@ -175,6 +226,12 @@ def create_or_update_skill(name: str, description: str, parameters: dict, python
     except Exception as e:
         return f"❌ خطا در نوشتن فایل اسکیل: {e}"
 
+    # ثبت هش صحت اسکریپت خارج از custom_skills
+    file_sha = _calc_file_sha256(file_path)
+    integrity = _load_integrity()
+    integrity[name] = file_sha
+    _save_integrity(integrity)
+
     registry = _load_registry()
     registry[name] = {
         "name": name,
@@ -184,8 +241,7 @@ def create_or_update_skill(name: str, description: str, parameters: dict, python
     }
     _save_registry(registry)
 
-    code_hash = hashlib.sha256(python_code.encode("utf-8")).hexdigest()[:16]
-    log.info("Skill '%s' saved (sha256[:16]=%s, %d bytes)", name, code_hash, len(python_code.encode("utf-8")))
+    log.info("Skill '%s' saved (sha256=%s, %d bytes)", name, file_sha[:16], len(python_code.encode("utf-8")))
 
     # بررسی ساختار بدون اجرای کد
     try:
@@ -203,7 +259,10 @@ def create_or_update_skill(name: str, description: str, parameters: dict, python
 
 
 def delete_skill(name: str) -> str:
-    """حذف یک اسکیل داینامیک."""
+    """حذف یک اسکیل داینامیک و ابطال رکورد هش آن."""
+    if not is_skill_creation_allowed():
+        return "❌ حذف اسکیل غیرفعال است (ALLOW_SKILL_CREATION=0)."
+
     name = name.strip().lower()
     registry = _load_registry()
     if name not in registry:
@@ -214,13 +273,19 @@ def delete_skill(name: str) -> str:
             os.remove(file_path)
         except Exception:
             pass
+
     del registry[name]
     _save_registry(registry)
+
+    integrity = _load_integrity()
+    integrity.pop(name, None)
+    _save_integrity(integrity)
+
     return f"🗑 اسکیل «{name}» حذف شد."
 
 
 async def execute_skill(name: str, args: dict, client, event) -> str:
-    """اجرای مستقیم یک اسکیل داینامیک ذخیره‌شده."""
+    """اجرای مستقیم یک اسکیل داینامیک پس از تایید صحت و یکپارچگی هش فایل."""
     name = name.strip().lower()
     registry = _load_registry()
     if name not in registry:
@@ -229,6 +294,16 @@ async def execute_skill(name: str, args: dict, client, event) -> str:
     file_path = _skill_path(name) if _NAME_RE.match(name) else None
     if not file_path or not os.path.exists(file_path):
         return f"❌ فایل اسکریپت اسکیل «{name}» روی دیسک پیدا نشد."
+
+    integrity = _load_integrity()
+    expected_sha = integrity.get(name)
+    if not expected_sha:
+        return f"❌ خطای یکپارچگی: رکورد هش امن برای اسکیل «{name}» یافت نشد."
+
+    actual_sha = _calc_file_sha256(file_path)
+    if actual_sha != expected_sha:
+        log.error("Skill integrity mismatch for %s: expected %s, got %s", name, expected_sha, actual_sha)
+        return f"❌ هشدار امنیتی: هش فایل اسکریپت «{name}» با امضای مجاز مطابقت ندارد و تغییر یافته است. اجرا مسدود شد."
 
     try:
         spec = importlib.util.spec_from_file_location(name, file_path)

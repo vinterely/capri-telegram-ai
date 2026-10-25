@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Capri Telegram AI Userbot [v1.5.0] - Linux / macOS Launcher
+# Capri Telegram AI Userbot [v1.6.0] - Linux / macOS Launcher
 # ==============================================================================
 
 set -e
@@ -9,7 +9,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
 echo "=============================================================================="
-echo "          🌟 CAPRI TELEGRAM AI USERBOT [v1.5.0] - LAUNCHER"
+echo "          🌟 CAPRI TELEGRAM AI USERBOT [v1.6.0] - LAUNCHER"
 echo "=============================================================================="
 
 # 1. Check Python
@@ -48,5 +48,5 @@ if [ ! -f "session.session" ] && [ ! -f "session" ]; then
 fi
 
 # 6. Run Bot
-echo "[*] Starting Capri Userbot [v1.5.0]..."
+echo "[*] Starting Capri Userbot [v1.6.0]..."
 python bot.py

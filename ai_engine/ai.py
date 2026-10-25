@@ -39,11 +39,15 @@ def _get_client(api_key=None):
     client = _clients.get(key)
     if client is None:
         proxy = config.get_http_proxy_url()
-        httpx_client = httpx.Client(proxy=proxy, timeout=30)
+        custom_headers = {"x-goog-api-key": key} if key else {}
+        httpx_client = httpx.Client(proxy=proxy, timeout=30, headers=custom_headers)
         try:
-            client = genai.Client(api_key=key, http_options={"httpx_client": httpx_client})
+            client = genai.Client(api_key=key, http_options={"httpx_client": httpx_client, "headers": custom_headers})
         except Exception:
-            client = genai.Client(api_key=key)
+            try:
+                client = genai.Client(api_key=key, http_options={"headers": custom_headers} if custom_headers else None)
+            except Exception:
+                client = genai.Client(api_key=key)
         _clients[key] = client
     return client
 

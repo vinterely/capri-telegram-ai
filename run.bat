@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
-title Capri Telegram AI Userbot v1.5.0
+title Capri Telegram AI Userbot v1.6.0
 
 :MENU
 cls
 echo ==============================================================================
-echo           🌟 CAPRI TELEGRAM AI USERBOT [v1.5.0] - ONE-CLICK LAUNCHER
+echo           🌟 CAPRI TELEGRAM AI USERBOT [v1.6.0] - ONE-CLICK LAUNCHER
 echo ==============================================================================
 echo.
 
@@ -150,7 +150,7 @@ if not exist "session.session" (
 
 cls
 echo ==============================================================================
-echo [*] Starting Capri Telegram AI Userbot [v1.5.0]...
+echo [*] Starting Capri Telegram AI Userbot [v1.6.0]...
 echo [*] Press Ctrl+C at any time in this window to stop the bot.
 echo ==============================================================================
 echo.

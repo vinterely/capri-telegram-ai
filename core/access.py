@@ -32,12 +32,27 @@ def _save(data: dict) -> None:
     fsutil.atomic_write_json(FILE, data)
 
 
-def is_denied(uid: int) -> bool:
-    return int(uid) in load()["deny"]
+def get_allowed_users() -> list:
+    """دریافت لیست شناسه عددی تمام کاربران مجاز."""
+    return list(load().get("allow", []))
 
 
-def is_allowed(uid: int) -> bool:
-    return int(uid) in load()["allow"]
+def is_denied(uid) -> bool:
+    if uid is None:
+        return True
+    try:
+        return int(uid) in load()["deny"]
+    except (ValueError, TypeError):
+        return True
+
+
+def is_allowed(uid) -> bool:
+    if uid is None:
+        return False
+    try:
+        return int(uid) in load()["allow"]
+    except (ValueError, TypeError):
+        return False
 
 
 def allow_user(uid: int) -> None:

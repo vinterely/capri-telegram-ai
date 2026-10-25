@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 
 from ai_engine import ai
 from services.social import briefing
@@ -15,23 +16,24 @@ from services.search import search
 from services.search import websearch
 
 # Tools permissible for non-owner whitelisted users
+# Tools permissible for non-owner whitelisted users (strictly excludes any link/file/destructive tools)
 STRANGER_ALLOWED_TOOLS = {
     "web_search", "get_current_datetime", "send_voice_note",
-    "search_google_images", "summarize_youtube_video", "read_webpage",
+    "search_google_images",
     "roast_target", "vibe_check", "generate_meme", "ask_clarification",
 }
 
-# Read-only tools permitted after ingesting untrusted external sources (web/youtube/channels).
-# All write/destructive tools are blocked once tainted (deny-by-default).
-READ_ONLY_TOOLS = {
-    "web_search", "read_webpage", "summarize_youtube_video",
-    "search_channel_files", "search_in_channel", "search_music",
-    "search_google_images", "get_daily_briefing", "vibe_check",
-    "get_current_datetime", "ask_clarification", "get_vault_info",
+# ابزارهای مجاز پس از مصرف محتوای خارجی غیرقابل‌اعتماد (Taint Quarantine):
+# فقط ابزارهای کاملاً امن و ایزوله که هیچ تماسی با شبکه، اینترنت، فایل، کانال، حافظه یا تنظیمات ندارند!
+POST_TAINT_ALLOWED_TOOLS = {
+    "ask_clarification", "get_current_datetime",
 }
+READ_ONLY_TOOLS = POST_TAINT_ALLOWED_TOOLS  # جهت سازگاری کامل
+
 UNTRUSTED_SOURCE_TOOLS = {
     "web_search", "read_webpage", "summarize_youtube_video", "search_channel_files",
-    "search_in_channel", "search_music", "get_daily_briefing", "vibe_check",
+    "search_in_channel", "get_daily_briefing", "vibe_check", "read_channel_posts",
+    "search_music", "fetch_and_forward_movie",
 }
 TOOL_DEFINITIONS = [
     {
@@ -102,7 +104,10 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "target": {"type": "string", "description": "نام فیلم/سریال یا لینک دانلود."},
-                    "quality": {"type": "integer", "description": "کیفیت عددی مانند 1080، 720، 480."}
+                    "quality": {"type": "integer", "description": "کیفیت عددی مانند 1080، 720، 480."},
+                    "audio": {"type": "string", "enum": ["subtitled", "dubbed"], "description": "نوع صوت یا زیرنویس: subtitled برای زیرنویس چسبیده یا زیرنویس، dubbed برای دوبله فارسی."},
+                    "season": {"type": "integer", "description": "شماره فصل سریال در صورت درخواست کاربر."},
+                    "episode": {"type": "string", "description": "شماره قسمت سریال (عددی) یا all برای کل فصل."}
                 },
                 "required": ["target"]
             }
@@ -440,18 +445,54 @@ TOOL_DEFINITIONS = [
 ]
 
 
-def get_all_tool_definitions() -> list:
-    """Combine static native tools with dynamic runtime Hermes skills."""
+def get_all_tool_definitions(is_owner: bool = True, tainted: bool = False) -> list:
+    """
+    تولید لیست ابزارهای فعال بر اساس نقش کاربر و وضعیت آلودگی داده (Taint).
+    در وضعیت Taint، مدل بلافاصله خلع سلاح می‌شود و هیچ ابزار شبکه‌ای یا فایلی دریافت نمی‌کند.
+    """
+    if tainted:
+        return [t for t in TOOL_DEFINITIONS if t["function"]["name"] in POST_TAINT_ALLOWED_TOOLS]
+
     from ai_engine import skills_manager
-    dynamic = skills_manager.get_skill_tool_definitions()
-    return TOOL_DEFINITIONS + dynamic
+    from core import config
+    allow_skills = getattr(config, "ALLOW_SKILL_CREATION", False) or getattr(skills_manager, "ALLOW_SKILL_CREATION", False)
+
+    base_tools = TOOL_DEFINITIONS
+    if not allow_skills:
+        base_tools = [t for t in base_tools if t["function"]["name"] not in ("create_or_update_skill", "delete_skill")]
+
+    if not is_owner:
+        return [t for t in base_tools if t["function"]["name"] in STRANGER_ALLOWED_TOOLS]
+
+    dynamic = skills_manager.get_skill_tool_definitions() if allow_skills else []
+    return base_tools + dynamic
 
 
-async def execute_tool(name: str, args: dict, event, client, status=None) -> str:
+async def execute_tool(name: str, args: dict, event, client, status=None, is_owner: bool = True, tainted: bool = False) -> str:
     """Execute dispatched tool and return stringified result to the ReAct agent."""
     try:
-        if not getattr(event, "out", False) and name not in STRANGER_ALLOWED_TOOLS:
+        # ۱. قرنطینه امنیتی Taint: در صورتی که داده خارجی مصرف شده باشد، هیچ ابزار شبکه‌ای یا فایلی حق اجرا ندارد
+        if tainted and name not in POST_TAINT_ALLOWED_TOOLS:
+            return (
+                f"⛔ قرنطینه امنیتی داده‌های خارجی (Taint Quarantine): "
+                f"ابزار '{name}' پس از دریافت داده از وب/رسانه مسدود است. "
+                f"جهت پیشگیری ۱۰۰٪ از تزریق پرامپت و نشت اطلاعات، این درخواست فقط باید به شکل پاسخ متنی تکمیل شود."
+            )
+
+        # ۲. گارد تفکیک مالک/غریبه
+        is_really_owner = is_owner and getattr(event, "out", False)
+        if not is_really_owner and name not in STRANGER_ALLOWED_TOOLS:
             return "⛔ این قابلیت فقط برای صاحب اکانت فعال است."
+
+        # ۳. گارد اسکیل‌ها
+        if name in ("create_or_update_skill", "delete_skill"):
+            from core import config
+            from ai_engine import skills_manager
+            allow_skills = getattr(config, "ALLOW_SKILL_CREATION", False) or getattr(skills_manager, "ALLOW_SKILL_CREATION", False)
+            if not allow_skills:
+                return "⛔ ساخت، ویرایش یا حذف اسکیل‌ها در تنظیمات سیستم غیرفعال است (ALLOW_SKILL_CREATION=0)."
+            if tainted:
+                return "⛔ خطای امنیتی: ایجاد یا ذخیره اسکیل پس از مصرف داده‌های خارجی مسدود است."
         if name == "web_search":
             query = args.get("query", "").strip()
             if not query:
@@ -553,6 +594,9 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
         elif name in ("fetch_and_forward_movie", "download_movie_or_file"):
             target = args.get("target", "").strip()
             quality = args.get("quality")
+            audio = args.get("audio")
+            season = args.get("season")
+            episode = args.get("episode")
             if not target:
                 return "خطا: عنوان یا لینک مشخص نشده."
             from services.media import ytsummary
@@ -568,9 +612,49 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
                     await status.edit(f"🎬 در حال بررسی و دریافت «{target}»...")
                 except Exception:
                     pass
+
             from services.media import media_flow
+            raw_text = getattr(event, "raw_text", "") or getattr(event, "message", "") or ""
+            if not audio and raw_text:
+                detected_a = media_flow.extract_audio(raw_text)
+                if detected_a:
+                    audio = detected_a
+            if not quality and raw_text:
+                detected_q = media_flow.extract_quality(raw_text)
+                if detected_q:
+                    quality = detected_q
+            if season is None and raw_text:
+                detected_s = media_flow.extract_season(raw_text)
+                if detected_s is not None:
+                    season = detected_s
+            if episode is None and raw_text:
+                detected_e = media_flow.extract_episode(raw_text)
+                if detected_e is not None:
+                    episode = detected_e
+
+            query_parts = [target]
+            if season is not None:
+                query_parts.append(f"فصل {season}")
+            if episode is not None:
+                query_parts.append(f"قسمت {episode}" if str(episode) != "all" else "کل فصل")
+            if quality:
+                query_parts.append(f"کیفیت {quality}")
+            if audio:
+                query_parts.append("زیرنویس" if audio == "subtitled" else "دوبله")
+            query_str = " ".join(query_parts)
+
+            req_override = {
+                "title": target,
+                "quality": int(quality) if quality and str(quality).isdigit() else (quality if quality else None),
+                "audio": audio,
+                "season": int(season) if season and str(season).isdigit() else (season if season else None),
+                "episode": episode
+            }
+
             import bot
-            ok, res_msg = await media_flow.smart_fetch_media(client, event, status, target if not quality else f"{target} کیفیت {quality}", bot.pending)
+            ok, res_msg = await media_flow.smart_fetch_media(
+                client, event, status, query_str, bot.pending, req_override=req_override
+            )
             return res_msg
 
         elif name == "search_google_images":
@@ -594,8 +678,10 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
             if act == "add":
                 if not fact:
                     return "خطا: متنی برای ذخیره داده نشد."
-                memory.add_memory(fact)
-                return f"واقعیت به حافظه بلندمدت اضافه شد: «{fact}»"
+                import bot
+                chat_key = str(event.chat_id)
+                bot.pending[chat_key] = {"kind": "confirm_add_memory", "fact": fact, "ts": time.time()}
+                return f"⚠️ برای ذخیره «{fact}» در حافظه بلندمدت، تایید شما لازم است. لطفاً برای تایید بگویید «آره» یا برای لغو «نه»."
             elif act == "remove":
                 if not fact:
                     return "خطا: موضوع برای حذف مشخص نشده."
@@ -688,34 +774,19 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
                 if not names:
                     return "هنوز کانال مهمی ثبت نشده است."
                 return "کانال‌های مهم ثبت‌شده برای خلاصه روزانه:\n" + "\n".join(f"- {n}" for n in names)
-            elif act == "add":
+            elif act in ("add", "remove"):
                 if not cname:
                     return "خطا: نام کانال مشخص نشده است."
-                ent_name = None
-                if cname.startswith("@") or "t.me/" in cname:
-                    try:
-                        ent = await client.get_entity(cname)
-                        ent_name = getattr(ent, "title", None) or getattr(ent, "username", None) or cname
-                    except Exception:
-                        pass
-                if not ent_name:
-                    dialogs = await channels.find_channels(client, cname, limit=50)
-                    if dialogs:
-                        ent_name = dialogs[0].name
-                if not ent_name:
-                    ent_name = cname
-                briefing.add_important(ent_name)
-                return f"⭐ کانال «{ent_name}» به لیست کانال‌های مهم اضافه شد و در خلاصه روزانه می‌آید."
-            elif act == "remove":
-                if not cname:
-                    return "خطا: نام کانال مشخص نشده است."
-                names = briefing.load_important()
-                pn = channels._norm(cname)
-                matches = [n for n in names if pn in channels._norm(n) or channels._norm(n) in pn]
-                if not matches:
-                    return f"«{cname}» در لیست کانال‌های مهم نبود."
-                briefing.remove_important(matches[0])
-                return f"🗑 «{matches[0]}» از لیست کانال‌های مهم برداشته شد."
+                import bot
+                chat_key = str(event.chat_id)
+                action_fa = "افزودن به" if act == "add" else "حذف از"
+                bot.pending[chat_key] = {
+                    "kind": "confirm_important_channel",
+                    "action": act,
+                    "channel_name": cname,
+                    "ts": time.time(),
+                }
+                return f"⚠️ برای {action_fa} لیست کانال‌های مهم («{cname}»)، تایید شما لازم است. لطفاً برای تایید بگویید «آره» یا برای لغو «نه»."
             return "عملیات نامعتبر است."
 
         elif name == "ask_clarification":
@@ -785,7 +856,6 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
                 except Exception:
                     pass
             import os
-            import time
             from services.voice import voice
             os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
             ts = int(time.time() * 1000)
@@ -860,7 +930,6 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
 
         elif name == "draft_and_send_message":
             from services.social import drafter
-            import time
             target_str = args.get("target_contact", "").strip()
             intent = args.get("message_intent", "").strip()
             tone = args.get("tone", "صمیمی و محترمانه").strip()
@@ -1040,6 +1109,12 @@ async def execute_tool(name: str, args: dict, event, client, status=None) -> str
         # Execute runtime dynamic Hermes skill
         from ai_engine import skills_manager
         if name in skills_manager.get_all_skills():
+            from core import config
+            allow_skills = getattr(config, "ALLOW_SKILL_CREATION", False) or getattr(skills_manager, "ALLOW_SKILL_CREATION", False)
+            if not allow_skills:
+                return "⛔ اجرای اسکیل‌های متفرقه در تنظیمات سیستم غیرفعال است (ALLOW_SKILL_CREATION=0)."
+            if tainted:
+                return "⛔ خطای امنیتی: اجرای اسکیل‌های پویا در وضعیت Taint مسدود است."
             if status:
                 try:
                     await status.edit(f"⚙️ در حال اجرای اسکیل «{name}»...")

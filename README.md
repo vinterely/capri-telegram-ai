@@ -1,10 +1,10 @@
-# 🌟 Capri — Autonomous Telegram AI Userbot (v1.5.0)
+# 🌟 Capri — Autonomous Telegram AI Userbot (v1.6.0)
 
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Telethon](https://img.shields.io/badge/telethon-1.36+-0088cc.svg)](https://docs.telethon.dev/)
 [![Architecture](https://img.shields.io/badge/architecture-Autonomous%20ReAct%20Agent-orange.svg)]()
-[![Tests](https://img.shields.io/badge/unit%20tests-104%20passed%20(100%25)-brightgreen.svg)]()
-[![Release](https://img.shields.io/badge/release-v1.5.0-blueviolet.svg)](https://github.com/vinterely/capri-telegram-ai/releases/tag/v1.5.0)
+[![Tests](https://img.shields.io/badge/unit%20tests-137%20passed%20(100%25)-brightgreen.svg)]()
+[![Release](https://img.shields.io/badge/release-v1.6.0-blueviolet.svg)](https://github.com/vinterely/capri-telegram-ai/releases/tag/v1.6.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 🌐 **Language / زبان:** **English** | [فارسی (Persian)](README_FA.md)
@@ -22,7 +22,7 @@ Capri requires no third-party cloud servers. It runs entirely on your local mach
 ---
 
 ## 📋 Table of Contents
-- [What's New in v1.5.0](#-whats-new-in-v150)
+- [What's New in v1.6.0](#-whats-new-in-v160)
 - [Key Features & Architecture](#-key-features--architecture)
   - [1. Autonomous ReAct Agent & Multi-Provider Failover](#1-autonomous-react-agent--multi-provider-failover)
   - [2. Capri Vault: Smart Saved Messages Organizer](#2-capri-vault-smart-saved-messages-organizer)
@@ -42,14 +42,16 @@ Capri requires no third-party cloud servers. It runs entirely on your local mach
 
 ---
 
-## 🚀 What's New in v1.5.0
+## 🚀 What's New in v1.6.0
 
 - ⚡ **Zero-Retry Fast Failover:** Eliminates lagging network loops; instantly fails over on broken SSL/HTTP connections.
+- 🎬 **Smart Media & AI Button Navigation:** Intelligent multi-level inline button navigation with subtitle vs dubbed matching, quality selection (480p, 720p, 1080p), cycle breakers, and strict back-button filtering.
+- 🛡️ **Fail-Closed Access Whitelist:** Thread-safe, atomic 0600 `access.json` control with silent stranger rejection and owner commands (`کاپری مجوز بده` / `کاپری مجوز بگیر` / `کاپری لیست مجوزها`).
 - ⏰ **Natural Language Reminder Engine:** Fully stem-aware Persian/English reminder parser with single-item deletion (`یادآور ۱ رو پاک کن`) and bulk wipe (`پاک کردن یادآورها`).
 - 📢 **Stem-Aware Channel Scanner:** Deep dialog scanner (500+ chats) with root-stem matching (e.g., `کنکور` / `کنکوری`) and numbered confirmation.
 - 🎙️ **Multi-Voice Studio Audio:** Microsoft Edge-TTS support with instant voice switching (`دلارا` / `فرید`).
-- 🛡️ **Anti-Prompt Injection & Circuit Breakers:** Protects against untrusted external chat messages while guaranteeing zero-denial of owner capabilities.
-- 🧪 **104 Unit Tests (100% Pass Rate):** Full automated test coverage across all routing, parsing, reaction, and vault subsystems.
+- 🛡️ **Anti-Prompt Injection & Taint Quarantine:** Protects against untrusted external chat messages while guaranteeing zero-denial of owner capabilities.
+- 🧪 **137 Unit Tests (100% Pass Rate):** Full automated test coverage across all routing, security, media navigation, parsing, reaction, and vault subsystems.
 
 ---
 
@@ -160,12 +162,12 @@ For detailed instructions, see the complete [TUTORIAL.md](TUTORIAL.md).
 
 ## 🧪 Verification & Test Suite
 
-Capri includes an exhaustive 104-unit test suite verifying all logic:
+Capri includes an exhaustive 137-unit test suite verifying all logic:
 ```bash
 python -m unittest discover -s tests
 ```
 ```text
-Ran 104 tests in 4.4s
+Ran 137 tests in 3.4s
 OK (All passed)
 ```
 

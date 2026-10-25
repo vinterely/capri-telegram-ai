@@ -27,8 +27,8 @@ ORDINALS = {
 CONFIRM_HINTS = ("تایید", "تأیید", "بررسی", "عضویت", "عضو شدم", "چک", "check", "confirm", "✅", "شدم", "دریافت")
 SPONSOR_HINTS = ("عضو", "عضویت", "کانال", "جوین", "سبسکرایب", "subscribe", "join")
 BATCH_HINTS = ("دانلود یکجا", "تمام قسمت", "پک کامل", "فایل زیپ", "همه‌ی قسمت", "دانلود کل", "zip")
-DUBBED_HINTS = ("دوبله", "دوبله فارسی", "صوت دوبله", "دوبلاژ", "dubbed", "fa dub")
-SUB_HINTS = ("زیرنویس", "زیرنویس چسبیده", "softsub", "hardsub", "sub")
+DUBBED_HINTS = ("دوبله", "دوبله فارسی", "صوت دوبله", "دوبلاژ", "dubbed", "fa dub", "fa_dub")
+SUB_HINTS = ("زیرنویس", "زیرنویس چسبیده", "softsub", "hardsub", "sub", "subbed", "farsisub")
 
 
 def normalize_digits(s: str) -> str:
@@ -83,12 +83,16 @@ def extract_quality(text: str) -> Optional[int]:
     return None
 
 
-def extract_audio(text: str) -> Optional[str]:
-    """تشخیص نسخه دوبله یا زیرنویس."""
+def extract_audio(text: str, preferred: Optional[str] = None) -> Optional[str]:
+    """تشخیص نسخه دوبله یا زیرنویس با اولویت ترجیح کاربر."""
     t = (text or "").lower()
-    if any(k in t for k in DUBBED_HINTS):
+    has_dub = any(k in t for k in DUBBED_HINTS)
+    has_sub = any(k in t for k in SUB_HINTS)
+    if has_dub and has_sub:
+        return preferred or "subtitled"
+    if has_dub:
         return "dubbed"
-    if any(k in t for k in SUB_HINTS):
+    if has_sub:
         return "subtitled"
     return None
 
@@ -368,27 +372,97 @@ def analyze_menu_buttons(buttons_2d: List[List[Any]]) -> Dict[str, Any]:
         s_num = extract_season(txt)
         if s_num is not None:
             res["seasons"][s_num] = b
-            continue
 
         # قسمت‌ها
         ep_num = extract_episode(txt)
         if isinstance(ep_num, int):
             res["episodes"][ep_num] = b
-            continue
 
         # کیفیت‌ها
         q_num = extract_quality(txt)
         if q_num is not None and q_num in fetch.QUALITY_SET:
             res["qualities"][q_num] = b
-            continue
 
         # صوت
         a_type = extract_audio(txt)
         if a_type is not None:
             res["audio"][a_type] = b
-            continue
 
     return res
+
+
+def match_preferred_button(buttons_2d_or_1d: Any, req: Dict[str, Any]) -> Optional[Any]:
+    """تطابق قطعی و هوشمند دکمه‌ها با اولویت‌های کاربر (فصل، صوت، کیفیت، دانلود)."""
+    if not buttons_2d_or_1d:
+        return None
+    if isinstance(buttons_2d_or_1d, list) and buttons_2d_or_1d and isinstance(buttons_2d_or_1d[0], list):
+        flat_buttons = [b for row in buttons_2d_or_1d for b in row]
+    else:
+        flat_buttons = list(buttons_2d_or_1d)
+
+    target_audio = req.get("audio")
+    target_q = req.get("quality")
+    target_s = req.get("season")
+    target_ep = req.get("episode")
+
+    candidates = [
+        b for b in flat_buttons
+        if getattr(b, "data", None) and not ai_nav.is_back_button(getattr(b, "text", "") or "")
+    ]
+    if not candidates:
+        return None
+
+    best_btn = None
+    best_score = -999
+
+    for b in candidates:
+        txt = (b.text or "").strip()
+        score = 0
+
+        # ۱. صوت / زیرنویس
+        b_audio = extract_audio(txt, preferred=target_audio)
+        if target_audio:
+            if b_audio == target_audio:
+                score += 35
+            elif b_audio is not None and b_audio != target_audio:
+                score -= 60
+
+        # ۲. کیفیت
+        b_q = extract_quality(txt)
+        if target_q and b_q is not None and b_q in fetch.QUALITY_SET:
+            if b_q == target_q:
+                score += 45
+            else:
+                diff = abs(b_q - target_q)
+                score += max(0, 20 - (diff // 50))
+
+        # ۳. فصل
+        b_s = extract_season(txt)
+        if target_s is not None and b_s is not None:
+            if b_s == target_s:
+                score += 30
+            else:
+                score -= 40
+
+        # ۴. قسمت
+        b_ep = extract_episode(txt)
+        if isinstance(target_ep, int) and isinstance(b_ep, int):
+            if b_ep == target_ep:
+                score += 40
+            else:
+                score -= 30
+
+        # ۵. دکمه مستقیم دانلود
+        if any(h in txt.lower() for h in fetch.DOWNLOAD_HINTS):
+            score += 15
+
+        if score > best_score:
+            best_score = score
+            best_btn = b
+
+    if best_score >= 30:
+        return best_btn
+    return None
 
 
 async def _handle_sponsors(client, bot_entity, current_msg, joined_list) -> Tuple[Any, str]:
@@ -495,6 +569,7 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
     all_collected = []
     seen_doc_ids = set()
     clicked_data = set()
+    recent_clicked = []
     last_action_text = "شروع تعامل"
 
     async def forward_now(doc_msg):
@@ -614,10 +689,43 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                         break
             return all_collected, None
 
-        # ناوبری دکمه‌ها با هوش مصنوعی (ارسال گزینه‌ها به مدل برای انتخاب بهترین دکمه)
-        clickable = [b for row in (cur_msg.buttons or []) for b in row if getattr(b, "data", None) and b.data not in clicked_data]
+        # ۱. اولویت اول: تطابق صریح و هوشمند بر اساس درخواست کاربر (فصل، صوت، کیفیت و دانلود)
+        best_b = match_preferred_button(cur_msg.buttons, req)
+        if best_b and getattr(best_b, "data", None) and best_b.data not in clicked_data:
+            btn_txt = (best_b.text or "").strip()
+            last_action_text = f"انتخاب «{btn_txt}»"
+            if status:
+                try:
+                    await status.edit(f"🎬 در حال انتخاب «{btn_txt}»...")
+                except Exception:
+                    pass
+            await cur_msg.click(data=best_b.data)
+            clicked_data.add(best_b.data)
+            recent_clicked.append(best_b.data)
+            await asyncio.sleep(2.5)
+
+            docs_after = await collect_documents(client, bot, cur_msg.id, timeout=4.0)
+            for d in docs_after:
+                await forward_now(d)
+
+            if isinstance(target_ep, int) and len(all_collected) >= 1:
+                return all_collected, None
+
+            msgs = await client.get_messages(bot, limit=5)
+            new_act = next((m for m in msgs if not m.out and m.buttons and m.id > cur_msg.id), None)
+            if new_act:
+                cur_msg = new_act
+            else:
+                cur_msg = next((m for m in msgs if not m.out and m.buttons), cur_msg)
+            continue
+
+        # ۲. ناوبری دکمه‌ها با هوش مصنوعی (فیلتر اکید دکمه‌های برگشت/عقبگرد)
+        all_row_btns = [b for row in (cur_msg.buttons or []) for b in row if getattr(b, "data", None)]
+        non_back_btns = [b for b in all_row_btns if not ai_nav.is_back_button(getattr(b, "text", "") or "")]
+        pool = non_back_btns if non_back_btns else all_row_btns
+        clickable = [b for b in pool if b.data not in clicked_data]
         if not clickable:
-            clickable = [b for row in (cur_msg.buttons or []) for b in row if getattr(b, "data", None)]
+            clickable = pool
 
         if clickable:
             state = {
@@ -637,6 +745,7 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                         pass
                 await cur_msg.click(data=chosen_b.data)
                 clicked_data.add(chosen_b.data)
+                recent_clicked.append(chosen_b.data)
                 await asyncio.sleep(2.5)
 
                 # دریافت و فوروارد فایل‌هایی که احیاناً بعد از کلیک فرستاده شدند
@@ -646,6 +755,11 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
 
                 if isinstance(target_ep, int) and len(all_collected) >= 1:
                     return all_collected, None
+
+                # تشخیص حلقه و تکرار
+                if len(recent_clicked) >= 4 and recent_clicked[-1] == recent_clicked[-3] and recent_clicked[-2] == recent_clicked[-4]:
+                    log.warning("Loop cycle detected in bot navigation; exiting loop.")
+                    break
 
                 msgs = await client.get_messages(bot, limit=5)
                 new_act = next((m for m in msgs if not m.out and m.buttons and m.id > cur_msg.id), None)
@@ -659,13 +773,13 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                 # هوش مصنوعی تشخیص داد فرایند تمام شده است
                 return all_collected, None
 
-        # فال‌بک مبتنی بر قوانین و تحلیل ساختاری در صورت عدم انتخاب توسط هوش مصنوعی
+        # ۳. فال‌بک مبتنی بر قوانین و تحلیل ساختاری در صورت عدم انتخاب توسط هوش مصنوعی
         # ۱. انتخاب فصل
         if analysis["seasons"]:
             raw_s = req.get("season")
             target_season = int(raw_s) if raw_s is not None else None
             btn = analysis["seasons"].get(target_season) if target_season else analysis["seasons"][sorted(analysis["seasons"].keys())[0]]
-            if btn and btn.data not in clicked_data:
+            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
                 await cur_msg.click(data=btn.data)
                 clicked_data.add(btn.data)
                 await asyncio.sleep(2.2)
@@ -675,9 +789,9 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
 
         # ۲. انتخاب صوت
         if analysis["audio"]:
-            target_audio = req.get("audio") or "dubbed"
+            target_audio = req.get("audio") or "subtitled"
             btn = analysis["audio"].get(target_audio) or next(iter(analysis["audio"].values()), None)
-            if btn and btn.data not in clicked_data:
+            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
                 await cur_msg.click(data=btn.data)
                 clicked_data.add(btn.data)
                 await asyncio.sleep(2.2)
@@ -687,12 +801,12 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
 
         # ۳. انتخاب کیفیت
         if analysis["qualities"]:
-            target_q = req.get("quality") or 720
+            target_q = req.get("quality") or 480
             btn = analysis["qualities"].get(target_q)
             if not btn:
                 avail = sorted(analysis["qualities"].keys())
                 btn = analysis["qualities"][min(avail, key=lambda x: abs(x - target_q))]
-            if btn and btn.data not in clicked_data:
+            if btn and btn.data not in clicked_data and not ai_nav.is_back_button(btn.text or ""):
                 await cur_msg.click(data=btn.data)
                 clicked_data.add(btn.data)
                 await asyncio.sleep(2.2)
@@ -701,7 +815,7 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                 continue
 
         # ۴. دکمه مستقیم دانلود
-        dl_b = next((b for b in analysis["all_valid"] if b.data not in clicked_data and any(h in (b.text or "").lower() for h in fetch.DOWNLOAD_HINTS)), None)
+        dl_b = next((b for b in analysis["all_valid"] if b.data not in clicked_data and not ai_nav.is_back_button(b.text or "") and any(h in (b.text or "").lower() for h in fetch.DOWNLOAD_HINTS)), None)
         if dl_b:
             await cur_msg.click(data=dl_b.data)
             clicked_data.add(dl_b.data)
@@ -724,12 +838,18 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
     return [], "فایلی از سمت ربات دریافت نشد."
 
 
-async def smart_fetch_media(client, event, status, question: str, pending: dict) -> Tuple[bool, str]:
+async def smart_fetch_media(
+    client, event, status, question: str, pending: dict, req_override: Optional[Dict[str, Any]] = None
+) -> Tuple[bool, str]:
     """
     جریان هوشمند جستجو، تشخیص سریال/فیلم، پرسش از کاربر در صورت چند فصلی بودن،
     ناوبری دقیق و ارسال تمام فایل‌ها.
     """
     req = parse_media_request(question)
+    if req_override:
+        for k, v in req_override.items():
+            if v is not None:
+                req[k] = v
     title = req.get("title") or question
 
     # ترجمه عنوان فیلم در صورت نیاز
@@ -774,6 +894,7 @@ async def smart_fetch_media(client, event, status, question: str, pending: dict)
                     tok,
                     joined_list,
                     quality=req.get("quality"),
+                    audio=req.get("audio"),
                     season=req.get("season"),
                     episode=t_info.get("episode") or req.get("episode"),
                     event=event,

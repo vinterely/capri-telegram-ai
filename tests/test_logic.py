@@ -374,6 +374,98 @@ class TestAINavigation(unittest.IsolatedAsyncioTestCase):
             self.assertIn("1. [فصل اول]", prompt_arg)
             self.assertIn("2. [فصل دوم]", prompt_arg)
 
+    def test_is_back_button(self):
+        from services.media import ai_nav
+
+        self.assertTrue(ai_nav.is_back_button("🔙 برگشت"))
+        self.assertTrue(ai_nav.is_back_button("بازگشت"))
+        self.assertTrue(ai_nav.is_back_button("منوی اصلی"))
+        self.assertTrue(ai_nav.is_back_button("صفحه قبل"))
+        self.assertTrue(ai_nav.is_back_button("Back"))
+        self.assertTrue(ai_nav.is_back_button("return"))
+
+        # عدم فیلتر اشتباه عناوین فیلم
+        self.assertFalse(ai_nav.is_back_button("فیلم بازگشت به آینده"))
+        self.assertFalse(ai_nav.is_back_button("قسمت 1 بازگشت بتمن"))
+        self.assertFalse(ai_nav.is_back_button("480p"))
+        self.assertFalse(ai_nav.is_back_button("زیرنویس چسبیده"))
+
+    async def test_ai_pick_button_filters_back_button(self):
+        from services.media import ai_nav
+
+        b1 = MagicMock(text="480p")
+        b2 = MagicMock(text="720p")
+        b3 = MagicMock(text="1080p")
+        b4 = MagicMock(text="🔙 بازگشت")
+        buttons = [b1, b2, b3, b4]
+
+        req = {"title": "Inception", "quality": 480, "audio": "subtitled"}
+        state = {"files_count": 0, "last_action": "شروع"}
+
+        with patch("ai_engine.ai.ask_direct", return_value="1") as mock_ask:
+            choice = await ai_nav.ai_pick_button(buttons, "منوی کیفیت", req, state)
+            self.assertEqual(choice, 0)
+            mock_ask.assert_called_once()
+            prompt_arg = mock_ask.call_args[0][0]
+            # دکمه بازگشت نباید در فهرست ارسالی به مدل باشد
+            self.assertNotIn("بازگشت", prompt_arg)
+            self.assertIn("1. [480p]", prompt_arg)
+            self.assertIn("2. [720p]", prompt_arg)
+            self.assertIn("3. [1080p]", prompt_arg)
+            self.assertIn("زیرنویس", prompt_arg)
+            self.assertIn("480p", prompt_arg)
+
+    def test_match_preferred_button_audio_and_quality(self):
+        from services.media import media_flow
+
+        # سناریوی کاربر: زیرنویس ۴۸۰
+        req = {"title": "Inception", "quality": 480, "audio": "subtitled"}
+
+        b_dub = MagicMock(text="دوبله فارسی", data=b"dub")
+        b_sub = MagicMock(text="زیرنویس چسبیده", data=b"sub")
+        b_back = MagicMock(text="🔙 بازگشت", data=b"back")
+
+        # گام ۱: منوی صوت
+        best_audio = media_flow.match_preferred_button([b_dub, b_sub, b_back], req)
+        self.assertEqual(best_audio, b_sub)
+
+        # گام ۲: منوی کیفیت
+        b_480 = MagicMock(text="480p", data=b"q480")
+        b_720 = MagicMock(text="720p", data=b"q720")
+        b_1080 = MagicMock(text="1080p", data=b"q1080")
+        best_q = media_flow.match_preferred_button([b_480, b_720, b_1080, b_back], req)
+        self.assertEqual(best_q, b_480)
+
+        # گام ۳: دکمه‌های ترکیبی کیفیت و صوت
+        b_dub_480 = MagicMock(text="480p دوبله", data=b"dub480")
+        b_sub_480 = MagicMock(text="480p زیرنویس چسبیده", data=b"sub480")
+        best_comb = media_flow.match_preferred_button([b_dub_480, b_sub_480, b_back], req)
+        self.assertEqual(best_comb, b_sub_480)
+
+    async def test_fetch_and_forward_movie_preserves_audio_and_quality(self):
+        from ai_engine import tools
+        client = AsyncMock()
+        event = MagicMock(raw_text="فیلم Inception زیرنویس 480 بده", out=True)
+        status = AsyncMock()
+
+        with patch("services.media.media_flow.smart_fetch_media", new_callable=AsyncMock) as mock_smart:
+            mock_smart.return_value = (True, "ارسال شد.")
+            res = await tools.execute_tool(
+                "fetch_and_forward_movie",
+                {"target": "Inception"},
+                event,
+                client,
+                status=status
+            )
+            self.assertEqual(res, "ارسال شد.")
+            mock_smart.assert_called_once()
+            call_kwargs = mock_smart.call_args.kwargs
+            req_override = call_kwargs.get("req_override")
+            self.assertIsNotNone(req_override)
+            self.assertEqual(req_override.get("audio"), "subtitled")
+            self.assertEqual(req_override.get("quality"), 480)
+            self.assertEqual(req_override.get("title"), "Inception")
+
 
 class TestDNDAndReminders(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

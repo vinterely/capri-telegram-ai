@@ -1,14 +1,18 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from telethon import functions, types
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 from core import config
+
+log = logging.getLogger("fetch")
 
 # لینک ربات با deep-link: t.me/SomeBot?start=TOKEN
 BOT_START_RE = re.compile(r"t\.me/([A-Za-z0-9_]+)\?start=([A-Za-z0-9_\-]+)")
@@ -104,6 +108,16 @@ def _label_quality(label: str):
         return None
     n = int(mm.group(1))
     return n if n in QUALITY_SET else None
+
+
+def _extract_audio_type(text: str) -> Optional[str]:
+    """تشخیص نوع صوت یا زیرنویس از روی متن دکمه."""
+    t = (text or "").lower()
+    if any(k in t for k in ("دوبله", "دوبله فارسی", "صوت دوبله", "دوبلاژ", "dubbed", "fa dub", "fa_dub")):
+        return "dubbed"
+    if any(k in t for k in ("زیرنویس", "زیرنویس چسبیده", "softsub", "hardsub", "sub", "subbed", "farsisub")):
+        return "subtitled"
+    return None
 
 
 def _norm(s: str) -> str:
@@ -315,6 +329,7 @@ async def follow_bot(
     joined: list,
     depth: int = 0,
     quality=None,
+    audio=None,
     season=None,
     episode=None,
     event=None,
@@ -421,7 +436,7 @@ async def follow_bot(
             mm = BOT_START_RE.search(best.url)
             return await follow_bot(
                 client, mm.group(1), mm.group(2), joined, depth + 1,
-                quality=quality, season=season, episode=episode,
+                quality=quality, audio=audio, season=season, episode=episode,
                 event=event, status=status
             )
 
@@ -556,6 +571,32 @@ async def follow_bot(
                 await asyncio.sleep(2.5)
                 continue
 
+        # 5.5) انتخاب صوت / زیرنویس (دوبله یا زیرنویس)
+        audio_buttons = {}
+        for b in buttons:
+            if b.data and b.data not in clicked:
+                a_type = _extract_audio_type(b.text or "")
+                if a_type:
+                    audio_buttons[a_type] = b
+
+        if audio_buttons:
+            target_audio = audio or "subtitled"
+            chosen_a_btn = audio_buttons.get(target_audio)
+            if not chosen_a_btn and audio_buttons:
+                chosen_a_btn = next(iter(audio_buttons.values()))
+
+            if chosen_a_btn:
+                if status:
+                    try:
+                        lbl = "زیرنویس" if target_audio == "subtitled" else "دوبله"
+                        await status.edit(f"🎙 در حال انتخاب نسخه {lbl}...")
+                    except Exception:
+                        pass
+                await act.click(data=chosen_a_btn.data)
+                clicked.add(chosen_a_btn.data)
+                await asyncio.sleep(2.5)
+                continue
+
         # 6) انتخاب کیفیت (1080، 720، 480 و ...)
         qual_buttons = {}
         for b in buttons:
@@ -654,13 +695,19 @@ async def follow_bot(
             await asyncio.sleep(2.5)
             continue
 
-        # 10) ناوبری با هوش مصنوعی برای دکمه‌های خارج از الگو
-        flat_valid = [b for b in buttons if b.data and b.data not in clicked]
+        # 10) ناوبری با هوش مصنوعی برای دکمه‌های خارج از الگو (بدون دکمه‌های بازگشت)
+        from services.media import ai_nav
+        flat_valid = [b for b in buttons if b.data and b.data not in clicked and not ai_nav.is_back_button(b.text or "")]
         if flat_valid:
             try:
-                from services.media import ai_nav
                 state = {"files_count": len(files), "last_action": "ناوبری", "step": _}
-                req_info = {"title": getattr(event, "message", "") or "دانلود", "season": season, "episode": episode, "quality": quality}
+                req_info = {
+                    "title": getattr(event, "message", "") or "دانلود",
+                    "season": season,
+                    "episode": episode,
+                    "quality": quality,
+                    "audio": audio
+                }
                 ai_idx = await ai_nav.ai_pick_button(flat_valid, act.message or "", req_info, state)
                 if ai_idx is not None and 0 <= ai_idx < len(flat_valid):
                     chosen_b = flat_valid[ai_idx]
@@ -678,8 +725,8 @@ async def follow_bot(
             except Exception as e:
                 log.warning("ai_nav in follow_bot error: %s", e)
 
-        # 11) هر دکمه‌ی callback دیگه (آخرین راه)
-        other = next((b for b in buttons if b.data and b.data not in clicked), None)
+        # 11) هر دکمه‌ی callback دیگه (آخرین راه - به استثنای دکمه‌های بازگشت)
+        other = next((b for b in buttons if b.data and b.data not in clicked and not ai_nav.is_back_button(b.text or "")), None)
         if other:
             await act.click(data=other.data)
             clicked.add(other.data)
@@ -697,7 +744,7 @@ def _status_msg(status: str, query: str) -> str:
     return status or f"نتونستم «{query}» رو بگیرم."
 
 
-async def fetch_movie(client, query: str, quality=None, season=None, episode=None, event=None, status=None):
+async def fetch_movie(client, query: str, quality=None, audio=None, season=None, episode=None, event=None, status=None):
     """می‌گرده، تشخیص می‌ده و همه‌ی فایل‌ها رو می‌گیره.
 
     برمی‌گردونه (files: list, err: str|None). کانال‌های اسپانسری که عضو شده رو آخرش لفت می‌ده.
@@ -708,7 +755,7 @@ async def fetch_movie(client, query: str, quality=None, season=None, episode=Non
         if mm:
             files, err_status = await follow_bot(
                 client, mm.group(1), mm.group(2), joined,
-                quality=quality, season=season, episode=episode,
+                quality=quality, audio=audio, season=season, episode=episode,
                 event=event, status=status
             )
             if files:
@@ -726,7 +773,7 @@ async def fetch_movie(client, query: str, quality=None, season=None, episode=Non
         for bot, token in links[:3]:
             files, err_status = await follow_bot(
                 client, bot, token, joined,
-                quality=quality, season=season, episode=episode,
+                quality=quality, audio=audio, season=season, episode=episode,
                 event=event, status=status
             )
             if files:

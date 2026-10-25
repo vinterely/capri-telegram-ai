@@ -7,6 +7,19 @@ import sys
 _INITIALIZED = False
 
 
+class SecretRedactingFilter(logging.Filter):
+    """فیلتر سراسری لاگر جهت پالایش کلیدهای حساس و پارامترهای URL پیش از ثبت در دیسک یا کنسول."""
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            record.msg = redact_secrets(record.msg)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {k: redact_secrets(v) if isinstance(v, str) else v for k, v in record.args.items()}
+            elif isinstance(record.args, (list, tuple)):
+                record.args = tuple(redact_secrets(v) if isinstance(v, str) else v for v in record.args)
+        return True
+
+
 def setup_logging():
     global _INITIALIZED
     if _INITIALIZED:
@@ -23,6 +36,8 @@ def setup_logging():
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
+    secret_filter = SecretRedactingFilter()
+
     file_handler = RotatingFileHandler(
         log_file,
         maxBytes=2 * 1024 * 1024,  # 2MB
@@ -31,10 +46,12 @@ def setup_logging():
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(log_level)
+    file_handler.addFilter(secret_filter)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(log_level)
+    console_handler.addFilter(secret_filter)
 
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
@@ -72,6 +89,8 @@ def sanitize_text(text: str, max_len: int = 80) -> str:
 _SECRET_PATTERNS = (
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+"),
     re.compile(r"\bsk-[A-Za-z0-9._\-]+"),
+    re.compile(r"AIzaSy[A-Za-z0-9_-]{33}"),
+    re.compile(r"(?i)([?&]key=)[^&\s]+"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[=:]\s*[^\s,;]+"),
     re.compile(r"(?i)\b[a-f0-9]{32,}\b"),
 )

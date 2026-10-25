@@ -89,8 +89,112 @@ class _BoundedIdSet:
 
 self_sent = _BoundedIdSet()
 
+
+def neutralize_triggers(text: str) -> str:
+    """خنثی‌کردن تریگر در خروجی بات با کاراکتر نیم‌فاصله یا نامرئی تا کلمه فعال‌ساز در متن خام وجود نداشته باشد."""
+    if not text or not isinstance(text, str):
+        return text
+    # شکستن کاپری با نیم‌فاصله (\u200c)
+    t = re.sub(r"[کك]\s*[اآ]\s*پ\s*ر\s*[یي]", "کا\u200cپری", text, flags=re.IGNORECASE)
+    # شکستن capri با zero-width space (\u200b)
+    t = re.sub(r"c\s*a\s*p\s*r\s*i", "ca\u200bpri", t, flags=re.IGNORECASE)
+    return t
+
+
+def register_self_sent(item, default_chat_id=None) -> None:
+    """ثبت مطمئن پیام‌های ارسالی یا فورواردشده به صورت تاپل (chat_id, message_id) جهت جلوگیری از تداخل چت‌ها."""
+    if item is None:
+        return
+    if isinstance(item, tuple) and len(item) == 2:
+        try:
+            self_sent.add((int(item[0]), int(item[1])))
+            self_sent.add(int(item[1]))
+        except (ValueError, TypeError):
+            pass
+        return
+    if isinstance(item, (list, tuple, set)):
+        for x in item:
+            register_self_sent(x, default_chat_id)
+        return
+    if hasattr(item, "id"):
+        try:
+            mid = int(item.id)
+            cid = getattr(item, "chat_id", None)
+            if cid is None and hasattr(item, "peer_id"):
+                peer = item.peer_id
+                cid = getattr(peer, "user_id", None) or getattr(peer, "chat_id", None) or getattr(peer, "channel_id", None)
+            if cid is None and default_chat_id is not None:
+                cid = default_chat_id
+            if cid is not None:
+                self_sent.add((int(cid), mid))
+            self_sent.add(mid)
+        except (ValueError, TypeError):
+            pass
+    elif isinstance(item, (int, str)):
+        try:
+            mid = int(item)
+            self_sent.add(mid)
+            if default_chat_id is not None:
+                self_sent.add((int(default_chat_id), mid))
+        except (ValueError, TypeError):
+            pass
+
+
+def _wrap_client_message_senders(cl):
+    """
+    رپ کردن تمامی متدهای ارسال و فوروارد پیام کلاینت جهت خنثی‌سازی تریگر و ثبت خودکار در self_sent.
+    هر خروجی بات قبل از ارسال تریگرهایش شکسته می‌شود و آیدی تک‌تک پیام‌ها در تاپل (chat_id, message_id) ثبت می‌گردد.
+    """
+    orig_send_message = cl.send_message
+    orig_send_file = cl.send_file
+    orig_forward_messages = cl.forward_messages
+
+    async def wrapped_send_message(entity, *args, **kwargs):
+        if args:
+            new_args = list(args)
+            if isinstance(new_args[0], str):
+                new_args[0] = neutralize_triggers(new_args[0])
+            args = tuple(new_args)
+        if "message" in kwargs and isinstance(kwargs["message"], str):
+            kwargs["message"] = neutralize_triggers(kwargs["message"])
+
+        res = await orig_send_message(entity, *args, **kwargs)
+        cid = getattr(entity, "id", None) or (int(entity) if isinstance(entity, int) else None)
+        register_self_sent(res, default_chat_id=cid)
+        return res
+
+    async def wrapped_send_file(entity, file, *args, **kwargs):
+        if "caption" in kwargs:
+            cap = kwargs["caption"]
+            if isinstance(cap, str):
+                kwargs["caption"] = neutralize_triggers(cap)
+            elif isinstance(cap, (list, tuple)):
+                kwargs["caption"] = [neutralize_triggers(c) if isinstance(c, str) else c for c in cap]
+        elif len(args) >= 1 and isinstance(args[0], str):
+            new_args = list(args)
+            new_args[0] = neutralize_triggers(new_args[0])
+            args = tuple(new_args)
+
+        res = await orig_send_file(entity, file, *args, **kwargs)
+        cid = getattr(entity, "id", None) or (int(entity) if isinstance(entity, int) else None)
+        register_self_sent(res, default_chat_id=cid)
+        return res
+
+    async def wrapped_forward_messages(entity, *args, **kwargs):
+        res = await orig_forward_messages(entity, *args, **kwargs)
+        cid = getattr(entity, "id", None) or (int(entity) if isinstance(entity, int) else None)
+        register_self_sent(res, default_chat_id=cid)
+        return res
+
+    cl.send_message = wrapped_send_message
+    cl.send_file = wrapped_send_file
+    cl.forward_messages = wrapped_forward_messages
+
+
+_wrap_client_message_senders(client)
+
 # سوال‌های معلق (پاسخ بعدی کاربر بدون اسم دستیار هم پردازش می‌شه)
-PENDING_TTL = 120  # ثانیه؛ پس از آن تاییدیه‌ها خودکار منقضی می‌شوند
+PENDING_TTL = 60  # ثانیه؛ پس از آن تاییدیه‌ها خودکار منقضی می‌شوند
 
 
 class _PendingDict(dict):
@@ -138,6 +242,14 @@ _NAME_PATTERNS = [_name_pattern(n) for n in config.ASSISTANT_NAMES]
 
 def has_trigger(text: str) -> bool:
     return any(p.search(text or "") for p in _NAME_PATTERNS)
+
+
+def starts_with_trigger(text: str) -> bool:
+    """بررسی اینکه پیام ورودی دقیقاً با کلمه تریگر (کاپری یا capri) در ابتدای متن آغاز شده باشد."""
+    if not text:
+        return False
+    t = text.strip()
+    return bool(re.match(r"^(?:[کك][اآ]\s*پ\s*ر\s*[یي]|capri)(?![آ-یa-zA-Z0-9])", t, re.IGNORECASE))
 
 
 def strip_trigger(text: str) -> str:
@@ -243,8 +355,66 @@ def _answer_yes(text: str, extra_pos: tuple = ()) -> bool:
     return False
 
 
+def _is_confirmation_response(text: str, p: dict) -> bool:
+    """بررسی تطابق دقیق با مرز کلمه (word boundary) برای تاییدیه تا عباراتی مانند 'اداره' تایید شمرده نشوند."""
+    if not text or not isinstance(text, str):
+        return False
+    t = _normalize_fa(text)
+    tokens = set(re.findall(r"[a-z0-9آ-ی]+", t))
+    if tokens & _POS_WORDS or tokens & _NEG_WORDS:
+        return True
+    kind = p.get("kind")
+    if kind in ("leave", "media_select"):
+        if any(tok.isdigit() for tok in tokens) or "همه" in tokens or "all" in tokens:
+            return True
+    return False
+
+
 async def _answer_pending(event, p: dict, text: str) -> None:
     kind = p.get("kind")
+    if kind == "confirm_add_memory":
+        fact = p.get("fact", "")
+        if _answer_yes(text, ("ذخیره کن", "ثبت کن", "یادت باشه")):
+            if fact:
+                memory.add_memory(fact)
+                await event.reply(f"✅ واقعیت با موفقیت در حافظه ماندگار ذخیره شد:\n«{fact}»")
+            else:
+                await event.reply("❌ متنی برای ذخیره داده نشد.")
+        else:
+            await event.reply("باشه، ذخیره در حافظه لغو شد.")
+        return
+    if kind == "confirm_important_channel":
+        action = p.get("action", "")
+        cname = p.get("channel_name", "")
+        if _answer_yes(text, ("اضافه کن", "حذف کن", "انجام بده")):
+            if action == "add":
+                ent_name = None
+                if cname.startswith("@") or "t.me/" in cname:
+                    try:
+                        ent = await client.get_entity(cname)
+                        ent_name = getattr(ent, "title", None) or getattr(ent, "username", None) or cname
+                    except Exception:
+                        pass
+                if not ent_name:
+                    dialogs = await channels.find_channels(client, cname, limit=50)
+                    if dialogs:
+                        ent_name = dialogs[0].name
+                if not ent_name:
+                    ent_name = cname
+                briefing.add_important(ent_name)
+                await event.reply(f"⭐ کانال «{ent_name}» به لیست کانال‌های مهم اضافه شد و در خلاصه روزانه می‌آید.")
+            elif action == "remove":
+                names = briefing.load_important()
+                pn = channels._norm(cname)
+                matches = [n for n in names if pn in channels._norm(n) or channels._norm(n) in pn]
+                if matches:
+                    briefing.remove_important(matches[0])
+                    await event.reply(f"🗑 «{matches[0]}» از لیست کانال‌های مهم برداشته شد.")
+                else:
+                    await event.reply(f"«{cname}» در لیست کانال‌های مهم نبود.")
+        else:
+            await event.reply("باشه، عملیات کانال‌های مهم لغو شد.")
+        return
     if kind == "confirm_leave_single":
         dialog = p.get("dialog")
         ch_name = p.get("name", "کانال")
@@ -400,6 +570,8 @@ async def send_images(event, query: str, limit: int = 3):
 
 
 def _learn(question: str, answer: str) -> None:
+    if getattr(agent, "last_run_tainted", False):
+        return
     try:
         fact = ai.extract_fact(question, answer)
         if fact:
@@ -415,6 +587,8 @@ _PERSONAL_MARKERS = ("من ", " من", "دوست دارم", "علاقه", "تر�
 
 async def _trigger_learn(question: str, answer: str) -> None:
     global _last_learn_time
+    if getattr(agent, "last_run_tainted", False):
+        return
     q = (question or "").strip()
     if len(q) < 15:
         return
@@ -468,23 +642,27 @@ def _chunk_text(text: str, max_size: int = 4000) -> list:
     return chunks
 
 
-async def _safe_edit_or_send(event, status, text: str) -> None:
-    """ارسال ایمن متن با پشتیبانی از چندبخشی خودکار جهت جلوگیری از خطای ۴۰۹۶ کاراکتر تلگرام."""
+async def _safe_edit_or_send(event, status, text: str, link_preview: bool = True) -> None:
+    """ارسال ایمن متن با پشتیبانی از چندبخشی خودکار جهت جلوگیری از خطای ۴۰۹۶ کاراکتر تلگرام و کنترل پیش‌نمایش لینک."""
     chunks = _chunk_text(text, 4000)
     if not chunks:
         return
     if status is not None:
         try:
-            await status.edit(chunks[0])
+            await status.edit(chunks[0], link_preview=link_preview)
+            register_self_sent(status.id, default_chat_id=event.chat_id)
         except Exception:
             try:
-                await event.reply(chunks[0])
+                m = await event.reply(chunks[0], link_preview=link_preview)
+                register_self_sent(m, default_chat_id=event.chat_id)
             except Exception:
                 pass
     else:
-        await event.reply(chunks[0])
+        m = await event.reply(chunks[0], link_preview=link_preview)
+        register_self_sent(m, default_chat_id=event.chat_id)
     for chunk in chunks[1:]:
-        await client.send_message(event.chat_id, chunk)
+        m = await client.send_message(event.chat_id, chunk, link_preview=link_preview)
+        register_self_sent(m, default_chat_id=event.chat_id)
         await asyncio.sleep(0.3)
 
 
@@ -853,11 +1031,14 @@ async def _handle_voice(event, status, msg, question) -> None:
                 await status.delete()
             except Exception:
                 pass
-        memory.remember_exchange(event.chat_id, text, answer)
-        asyncio.get_running_loop().create_task(asyncio.to_thread(_learn, text, answer))
+        is_owner_voice = getattr(msg, "out", False) and not getattr(msg, "fwd_from", None)
+        if is_owner_voice and not getattr(agent, "last_run_tainted", False):
+            memory.remember_exchange(event.chat_id, text, answer)
+            asyncio.get_running_loop().create_task(asyncio.to_thread(_learn, text, answer))
         _safe_unlink(mp3)
     except Exception as e:
-        await _stage(status, f"❌ خطا: {e}")
+        log.error("Error in _handle_voice: %s", type(e).__name__, exc_info=True)
+        await _stage(status, "❌ خطایی در پردازش ویس رخ داد؛ لطفاً مجدداً تلاش کنید.")
     finally:
         _safe_unlink(path)
 
@@ -1311,13 +1492,17 @@ async def on_model_callback(event):
         pass
 
 
-ACCESS_ALLOW_WORDS = ("جوابشو بده", "جوابش بده", "بذار جواب بده", "بزار جواب بده", "اجازه بده جواب بده")
-ACCESS_DENY_WORDS = ("جوابشو نده", "جوابش نده", "نذار جواب بده", "نزار جواب بده", "اجازه نده جواب بده")
+ACCESS_ALLOW_WORDS = ("مجوز بده", "اجازه بده", "جوابشو بده", "جوابش بده", "بذار جواب بده", "بزار جواب بده")
+ACCESS_DENY_WORDS = ("مجوز بگیر", "اجازه نده", "جوابشو نده", "جوابش نده", "نذار جواب بده", "نزار جواب بده")
+ACCESS_LIST_WORDS = ("لیست مجوزها", "لیست مجوز", "مجوزها", "کاربران مجاز")
 
 
 def _parse_access_command(question: str):
-    """تشخیص فرمان کنترل دسترسی: allow (جواب بده) / deny (جواب نده) یا None."""
+    """تشخیص فرمان مستقیم مدیریت مجوزها: list / allow / deny یا None."""
     q = _normalize_fa(question)
+    for w in ACCESS_LIST_WORDS:
+        if w in q:
+            return "list"
     for w in ACCESS_DENY_WORDS:
         if w in q:
             return "deny"
@@ -1328,7 +1513,7 @@ def _parse_access_command(question: str):
 
 
 async def _access_target(event):
-    """کاربر هدف فرمان کنترل دسترسی: شخصِ ریپلای‌شده یا طرف چت خصوصی."""
+    """کاربر هدف فرمان کنترل دسترسی: شخصِ ریپلای‌شده در گروه یا طرف چت خصوصی."""
     reply_id = getattr(event, "reply_to_msg_id", None)
     if reply_id:
         try:
@@ -1336,57 +1521,94 @@ async def _access_target(event):
             if rep and rep.sender_id:
                 try:
                     ent = await client.get_entity(rep.sender_id)
-                    name = (getattr(ent, "first_name", "") or "").strip() or str(rep.sender_id)
+                    first = (getattr(ent, "first_name", "") or "").strip()
+                    last = (getattr(ent, "last_name", "") or "").strip()
+                    name = f"{first} {last}".strip() or str(rep.sender_id)
                 except Exception:
+                    ent = None
                     name = str(rep.sender_id)
-                return rep.sender_id, name
+                return rep.sender_id, name, ent
         except Exception:
             pass
     if event.is_private:
         uid = event.chat_id
         try:
             ent = await client.get_entity(uid)
-            name = (getattr(ent, "first_name", "") or "").strip() or str(uid)
+            first = (getattr(ent, "first_name", "") or "").strip()
+            last = (getattr(ent, "last_name", "") or "").strip()
+            name = f"{first} {last}".strip() or str(uid)
         except Exception:
+            ent = None
             name = str(uid)
-        return uid, name
-    return None, None
+        return uid, name, ent
+    return None, None, None
 
 
 async def _handle_access_command(event, action: str) -> None:
-    uid, name = await _access_target(event)
-    if uid is None:
-        msg = await event.reply("❌ مشخص نکردی منظورت کیه. روی پیام همون شخص ریپلای کن، یا این دستور رو توی چت خصوصی با خودش بده.")
-        self_sent.add(msg.id)
+    if action == "list":
+        allowed = access.get_allowed_users()
+        if not allowed:
+            await client.send_message(event.chat_id, "هیچ کاربری در لیست مجوزها وجود ندارد.", parse_mode=None)
+            return
+        lines = ["لیست کاربران مجاز:"]
+        for idx, uid in enumerate(allowed, 1):
+            try:
+                ent = await client.get_entity(uid)
+                first = (getattr(ent, "first_name", "") or "").strip()
+                last = (getattr(ent, "last_name", "") or "").strip()
+                name = f"{first} {last}".strip() or str(uid)
+            except Exception:
+                name = "ناشناس"
+            lines.append(f"{idx}. نام: {name} | شناسه: {uid}")
+        await client.send_message(event.chat_id, "\n".join(lines), parse_mode=None)
         return
+
+    uid, name, ent = await _access_target(event)
+    if uid is None:
+        await client.send_message(
+            event.chat_id,
+            "❌ کاربر هدف مشخص نیست. در گروه روی پیام شخص ریپلای کنید، یا در پیوی او این دستور را بفرستید.",
+            parse_mode=None
+        )
+        return
+
+    me = await client.get_me()
+    if uid == me.id:
+        await client.send_message(event.chat_id, "❌ امکان تغییر مجوز برای خود مالک اکانت وجود ندارد.", parse_mode=None)
+        return
+
+    if ent and getattr(ent, "bot", False):
+        await client.send_message(event.chat_id, "❌ ربات‌ها هرگز مجاز نیستند و امکان اعطای مجوز به آن‌ها وجود ندارد.", parse_mode=None)
+        return
+
     if action == "allow":
         access.allow_user(uid)
-        msg = await event.reply(f"✅ از این به بعد به «{name}» جواب می‌دم (توی پیوی و گروه).")
+        await client.send_message(event.chat_id, f"✅ کاربر {name} با شناسه {uid} به لیست مجوزها اضافه شد.", parse_mode=None)
     else:
         access.deny_user(uid)
-        msg = await event.reply(f"🚫 از این به بعد به «{name}» جواب نمی‌دم (توی پیوی و گروه).")
-    self_sent.add(msg.id)
+        await client.send_message(event.chat_id, f"🚫 مجوز کاربر {name} با شناسه {uid} لغو شد و از لیست مجاز حذف گردید.", parse_mode=None)
 
 
 @client.on(events.NewMessage(outgoing=True))
 async def on_outgoing(event):
-    if event.id in self_sent:
+    if (event.chat_id, event.id) in self_sent or event.id in self_sent:
+        return
+
+    # ۱. گارد قطعی پیام‌های فورواردشده و ربات‌ها:
+    if getattr(event, "fwd_from", None) or getattr(event.message, "fwd_from", None):
+        return
+    if getattr(event, "via_bot_id", None) or getattr(event.message, "via_bot_id", None) or getattr(event, "via_bot", None) or getattr(event.message, "via_bot", None):
         return
 
     text = event.raw_text or ""
     key = str(event.chat_id)
 
-    # بررسی تایید یا لغو پیش‌نویس پیام (Ghostwriter confirmation)
-    clean_t = text.strip().lower()
-    clean_no_trig = strip_trigger(text).strip().lower()
-    check_words = clean_t.split() + clean_no_trig.split()
-    SEND_WORDS = ("بفرست", "ارسال", "ارسالش", "بفرستش", "اره", "آره", "تایید", "send")
-    CANCEL_WORDS = ("لغو", "کنسل", "نفرست", "بیخیال", "cancel")
-
+    # بررسی تایید یا لغو پیش‌نویس پیام (Ghostwriter confirmation) با تطبیق مرز کلمه
     reply_id = getattr(event, "reply_to_msg_id", None)
     draft = drafter.get_pending_draft(event.chat_id, reply_id)
     if draft:
-        if any(w in check_words for w in SEND_WORDS) or any(w in clean_t for w in ("بفرست", "ارسال کن", "اره بفرست", "آره بفرست")):
+        tokens = set(re.findall(r"[a-z0-9آ-ی]+", _normalize_fa(text)))
+        if tokens & _POS_WORDS:
             drafter.pop_pending_draft(event.chat_id, reply_id)
             ok, res_msg = await drafter.send_draft_message(client, draft["target"], draft["text"])
             if ok:
@@ -1394,27 +1616,26 @@ async def on_outgoing(event):
             else:
                 await event.reply(res_msg)
             return
-        elif any(w in check_words for w in CANCEL_WORDS):
+        elif tokens & _NEG_WORDS:
             drafter.pop_pending_draft(event.chat_id, reply_id)
             await event.reply(f"✖️ ارسال پیام به «{draft['name']}» لغو شد.")
             return
 
-    # جواب به سوال معلق یا تاییدیه (چه با اسم دستیار و چه بدون اسم)
-    CONFIRM_CANCEL_WORDS = ("آره", "اره", "بله", "نه", "خیر", "yes", "no", "ok", "تایید", "لغو", "کنسل", "بیخیال")
+    # جواب به سوال معلق یا تاییدیه کارهای حساس با تطابق کلمه مستقل و TTL مشخص
     if key in pending:
-        check_t = clean_no_trig if has_trigger(text) else clean_t
-        if not has_trigger(text) or any(w in check_t.split() for w in CONFIRM_CANCEL_WORDS) or check_t.isdigit():
+        p = pending.get(key)
+        if p and _is_confirmation_response(text, p):
             p = _take_pending(key)
             if p is not None:
                 try:
-                    await _answer_pending(event, p, check_t)
+                    await _answer_pending(event, p, text)
                 except Exception as e:
-                    await event.reply(f"❌ خطا: {e}")
+                    log.error("Error answering pending action: %s", type(e).__name__, exc_info=True)
+                    await event.reply("❌ خطایی در انجام عملیات رخ داد؛ لطفاً دوباره تلاش کنید.")
                 return
-            # تاییدیه منقضی شده بود؛ پاک شد و ادامه می‌دهیم
 
-    # پیام‌هایی که اسم دستیار در آن‌ها نیست نادیده گرفته می‌شوند
-    if not has_trigger(text):
+    # طبق ضوابط امنیتی، در on_outgoing فقط پیام‌هایی پردازش می‌شوند که تریگر در ابتدای متن باشد
+    if not starts_with_trigger(text):
         return
 
     pending.pop(key, None)  # فرمان جدید → سوال معلق قبلی لغو می‌شه
@@ -1572,15 +1793,15 @@ async def on_outgoing(event):
 
         # جستجوی وب (مسیر مستقیم، سریع و با خروجی جمینای — مستقل از ایجنت کند)
         if _is_web_question(question):
+            agent.last_run_tainted = True
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
-            answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem)
+            raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem)
+            answer = agent.sanitize_tainted_output(raw_answer)
             await _stage(status, "📝 دارم جواب می‌دم...")
             if _is_long_or_code(answer):
                 await _send_as_md(event, status, answer)
             else:
-                await _safe_edit_or_send(event, status, answer)
-            memory.remember_exchange(event.chat_id, question, answer)
-            asyncio.create_task(_trigger_learn(question, answer))
+                await _safe_edit_or_send(event, status, answer, link_preview=False)
             return
 
         # سوال ساده/گفتگویی (بدون ابزار) → پاسخ مستقیم و سریع با جمینای، بدون حلقه‌ی کند ایجنت
@@ -1599,10 +1820,13 @@ async def on_outgoing(event):
         await _stage(status, "🤔 دارم فکر می‌کنم...")
         answer = await agent.run_agent(question, context, mem, event, client, status, is_owner=True, sender_name=config.OWNER_NAME or "مالک")
 
+        is_tainted = getattr(agent, "last_run_tainted", False)
+
         if answer.startswith("__VOICE_SENT__:"):
             real_text = answer.replace("__VOICE_SENT__:", "").strip()
-            memory.remember_exchange(event.chat_id, question, real_text)
-            asyncio.create_task(_trigger_learn(question, real_text))
+            if not is_tainted:
+                memory.remember_exchange(event.chat_id, question, real_text)
+                asyncio.create_task(_trigger_learn(question, real_text))
             return
 
         if answer.startswith("__DRAFT_SENT__:") or answer in ("__ROAST_SENT__", "__MEME_SENT__"):
@@ -1617,7 +1841,7 @@ async def on_outgoing(event):
             ok = await voice.speak(voice_text, mp3)
             if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
                 vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
-                self_sent.add(vmsg.id)
+                register_self_sent(vmsg, default_chat_id=event.chat_id)
                 _safe_unlink(mp3)
                 _safe_unlink(ogg)
                 if status:
@@ -1625,21 +1849,24 @@ async def on_outgoing(event):
                         await status.delete()
                     except Exception:
                         pass
-                memory.remember_exchange(event.chat_id, question, voice_text)
-                asyncio.create_task(_trigger_learn(question, voice_text))
+                if not is_tainted:
+                    memory.remember_exchange(event.chat_id, question, voice_text)
+                    asyncio.create_task(_trigger_learn(question, voice_text))
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
+        lp = not is_tainted
         if _is_long_or_code(answer):
             await _send_as_md(event, status, answer)
         else:
-            await _safe_edit_or_send(event, status, answer)
-        memory.remember_exchange(event.chat_id, question, answer)
-        asyncio.create_task(_trigger_learn(question, answer))
+            await _safe_edit_or_send(event, status, answer, link_preview=lp)
+        if not is_tainted:
+            memory.remember_exchange(event.chat_id, question, answer)
+            asyncio.create_task(_trigger_learn(question, answer))
     except Exception as e:
         log.error("Error in on_outgoing: %s", type(e).__name__, exc_info=True)
         try:
-            msg = f"❌ خطا: {logger.redact_secrets(str(e))}"
+            msg = "❌ خطایی در پردازش رخ داد؛ لطفاً مجدداً تلاش کنید."
             if status is not None:
                 await status.edit(msg)
             else:
@@ -1655,6 +1882,32 @@ _global_daily = []
 STRANGER_DAILY_LIMIT = 50        # سقف روزانه‌ی درخواست هر غریبه
 STRANGER_GLOBAL_DAILY_LIMIT = 300  # سقف روزانه‌ی مجموع درخواست‌های همه غریبه‌ها
 
+# نگه‌داری زمان آخرین درخواست هر غریبه جهت اعمال کول‌داون قطعی ۱ دقیقه‌ای
+_stranger_last_request = {}
+_stranger_cooldown_warned = {}
+NON_OWNER_COOLDOWN_SECONDS = 60  # فاصله الزامی ۱ دقیقه (۶۰ ثانیه) بین هر درخواست برای سایر کاربران
+
+_URL_REGEX = re.compile(
+    r"(https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+|[a-zA-Z0-9-]+\.(com|org|net|ir|io|me|info|co|xyz|dev|app|ai|ru|cn|gg)/?\S*)",
+    re.IGNORECASE
+)
+
+
+def _message_has_file_or_media(msg) -> bool:
+    """تشخیص وجود هرگونه فایل، داکیومنت، مدیا، عکس، ویدیو، صدا یا ویس در پیام."""
+    if not msg:
+        return False
+    if getattr(msg, "file", None) or getattr(msg, "photo", None) or getattr(msg, "video", None):
+        return True
+    if getattr(msg, "document", None) or getattr(msg, "voice", None) or getattr(msg, "audio", None):
+        return True
+    m = getattr(msg, "media", None)
+    if m:
+        cname = type(m).__name__
+        if any(k in cname for k in ("Photo", "Document", "Audio", "Video", "Voice")):
+            return True
+    return False
+
 
 def _prune_stranger_state() -> None:
     """حذف کلیدهای غریبه‌هایی که بیش از ۲۴ ساعت بی‌فعالیت بوده‌اند (جلوگیری از رشد نامحدود دیکشنری‌ها)."""
@@ -1665,6 +1918,8 @@ def _prune_stranger_state() -> None:
     for u in stale:
         _stranger_daily.pop(u, None)
         _stranger_hits.pop(u, None)
+        _stranger_last_request.pop(u, None)
+        _stranger_cooldown_warned.pop(u, None)
 
 
 def _stranger_rate_ok(uid, limit: int = 6, window: int = 60) -> bool:
@@ -1698,9 +1953,19 @@ def _stranger_rate_ok(uid, limit: int = 6, window: int = 60) -> bool:
 
 @client.on(events.NewMessage(incoming=True))
 async def on_incoming_pm(event):
+    # ۱. گارد بات‌ها: بات‌ها (sender.bot) هرگز مجاز نیستند حتی اگر در لیست باشند
+    sender = await event.get_sender()
+    if sender is None or getattr(sender, "bot", False):
+        return
+
+    # ۲. اولین چک: هر فرستنده غیر از مالک که در لیست مجوز نباشد، هیچ پاسخی نگیرد (return ساده و بی‌صدا)
+    uid = event.sender_id
+    if not access.is_allowed(uid) or access.is_denied(uid):
+        return
+
     text = event.raw_text or ""
 
-    # حالت سرشلوغ (DND): پاسخ‌گویی خودکار در پیوی و تگ‌های گروه + گزارش لحظه‌ای به Saved Messages
+    # حالت سرشلوغ (DND): برای مخاطبان مجاز در پیوی و تگ‌های گروه
     if dnd.is_dnd_active() and not getattr(event, "out", False):
         if event.is_private:
             if await dnd.handle_incoming_pv(event, client):
@@ -1709,46 +1974,70 @@ async def on_incoming_pm(event):
             if await dnd.handle_incoming_group_mention(event, client):
                 return
 
-    # حالت همزاد: به‌جای مالک در پیوی جواب بده (فقط وقتی فعال، پیام خصوصی، بدون نام کاپری و طرف مجاز)
+    # حالت همزاد: برای مخاطبان مجاز در پیوی
     if ghost.is_active() and event.is_private and not has_trigger(text):
-        uid = event.sender_id
-        if access.is_allowed(uid) and not access.is_denied(uid):
-            if await ghost.reply_as_owner(event, client):
-                return
+        if await ghost.reply_as_owner(event, client):
+            return
 
     if not has_trigger(text):
         return
 
-    uid = event.sender_id
-    # deny همیشه برنده است: این کاربر حتی اگه قبلاً اجازه داشت، دیگر جواب نمی‌گیرد
-    if access.is_denied(uid):
-        return
-    # به‌طور پیش‌فرض غریبه‌ها جواب نمی‌گیرند؛ فقط کاربران مجازِ صاحب اکانت
-    if not access.is_allowed(uid):
-        return
+    # بررسی سقف کلی و روزانه کاربران مجاز
     if not _stranger_rate_ok(uid):
         return
+
+    # اعمال کول‌داون ۳۰ ثانیه‌ای بین هر درخواست برای کاربران مجاز
+    ALLOWED_USER_COOLDOWN_SECONDS = 30
+    now = time.time()
+    last_req = _stranger_last_request.get(uid, 0)
+    elapsed = now - last_req
+    if elapsed < ALLOWED_USER_COOLDOWN_SECONDS:
+        rem = int(ALLOWED_USER_COOLDOWN_SECONDS - elapsed) + 1
+        warns = _stranger_cooldown_warned.get(uid, 0)
+        if warns == 0:
+            _stranger_cooldown_warned[uid] = 1
+            s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
+            await event.reply(
+                f"⏳ {s_name} عزیز، جهت جلوگیری از اسپم، بین هر درخواست باید حداقل ۳۰ ثانیه فاصله باشد.\n"
+                f"لطفاً {rem} ثانیه دیگر صبور باشید. 😉"
+            )
+        return
+
     question = strip_trigger(text)
     if not question:
         await event.reply("سلام! بهم بگو چه کاری برات انجام بدم.")
         return
 
+    s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
+
+    # مسدودسازی دستورات ادمینی و بن/کیک اعضای گروه
+    if any(w in question for w in ("بن کن", "بلاک کن", "بنداز بیرون", "حذف کن از گروه", "کیک کن", "از گروه حذف", "اخراج کن")):
+        await event.reply(
+            f"🚫 {s_name} عزیز، کاپری دستیار شخصی (یوزربات) است و دسترسی مدیریت اعضای گروه یا بن/اخراج افراد را ندارد. این امور مربوط به مدیران خودِ گروه است. 😉"
+        )
+        return
+
+    # افراد متفرقه حق تغییر مدل، تنظیمات یا دستکاری حافظه/قوانین، یادآورها، یا کانال‌ها را ندارند
+    SENSITIVE_NON_OWNER_WORDS = (
+        "یادت باشه", "فراموش کن", "قانون ذخیره کن", "قانون جدید", "قانون رو ذخیره",
+        "یادآور", "یادآوری", "ریمایندر", "آلارم", "لفت بده", "لفت بزن", "کانال",
+        "پوشه", "مرتب کن", "خلاصه امروز", "بریفینگ", "پاسپورت", "passport"
+    )
+    if any(w in question for w in SENSITIVE_NON_OWNER_WORDS) or models.parse_request(question) or parse_voice_command(question):
+        await event.reply(f"🔒 {s_name} عزیز، تنظیمات، یادآورها، مدیریت کانال‌ها و قابلیت‌های محرمانه فقط توسط صاحب اکانت قابل استفاده است. 😉")
+        return
+
+    # ثبت تایم‌استمپ این درخواست موفق و ریست اخطار کول‌داون
+    _stranger_last_request[uid] = time.time()
+    _stranger_cooldown_warned[uid] = 0
+
     status = None
     try:
         status = await event.reply("🧠 در حال جمع‌آوری اطلاعات...")
-        self_sent.add(status.id)
+        register_self_sent(status, default_chat_id=event.chat_id)
 
         context = await get_context(event)
-        mem = ""  # حافظه‌ی صاحب اکانت به غریبه‌ها نشان داده نمی‌شود
-
-        # استخراج نام فرستنده پیام ورودی
-        sender = await event.get_sender()
-        s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
-
-        # افراد متفرقه حق تغییر مدل، تنظیمات یا دستکاری حافظه/قوانین یا صدا را ندارند
-        if any(w in question for w in ("یادت باشه", "فراموش کن", "قانون ذخیره کن", "قانون جدید", "قانون رو ذخیره")) or models.parse_request(question) or parse_voice_command(question):
-            await status.edit(f"🔒 {s_name} عزیز، تنظیمات، مدل‌ها و حافظه کاپری فقط توسط صاحب اکانت قابل تغییر است. 😉")
-            return
+        mem = ""  # حافظه‌ی صاحب اکانت به دیگران نشان داده نمی‌شود
 
         await _stage(status, "🤔 دارم فکر می‌کنم...")
         answer = await agent.run_agent(question, context, mem, event, client, status, is_owner=False, sender_name=s_name)
@@ -1765,7 +2054,7 @@ async def on_incoming_pm(event):
             ok = await voice.speak(voice_text, mp3)
             if ok and await asyncio.to_thread(voice.to_ogg, mp3, ogg):
                 vmsg = await client.send_file(event.chat_id, ogg, voice_note=True)
-                self_sent.add(vmsg.id)
+                register_self_sent(vmsg, default_chat_id=event.chat_id)
                 _safe_unlink(mp3)
                 _safe_unlink(ogg)
                 if status:
@@ -1776,18 +2065,20 @@ async def on_incoming_pm(event):
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
+        is_tainted = getattr(agent, "last_run_tainted", False)
+        lp = not is_tainted
         if _is_long_or_code(answer):
             await _send_as_md(event, status, answer)
         else:
-            await _safe_edit_or_send(event, status, answer)
+            await _safe_edit_or_send(event, status, answer, link_preview=lp)
     except Exception as e:
         log.error("Error in on_incoming_pm: %s", type(e).__name__, exc_info=True)
         try:
-            # به غریبه پیام خطای عمومی بده تا جزئیات/کلیدها فاش نشود
+            msg = "❌ خطایی در پردازش رخ داد؛ لطفاً مجدداً تلاش کنید."
             if status is not None:
-                await status.edit("❌ خطایی رخ داد؛ بعداً دوباره تلاش کن.")
+                await status.edit(msg)
             else:
-                await event.reply("❌ خطایی رخ داد؛ بعداً دوباره تلاش کن.")
+                await event.reply(msg)
         except Exception:
             pass
 
