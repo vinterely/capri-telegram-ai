@@ -26,7 +26,7 @@ STRANGER_ALLOWED_TOOLS = {
     "roast_target", "vibe_check", "generate_meme", "ask_clarification",
 }
 
-# ابزارهای مجاز پس از مصرف محتوای خارجی غیرقابل‌اعتماد (Taint Quarantine):
+# Allowed tools for external content processing:
 # فقط ابزارهای کاملاً امن و ایزوله که هیچ تماسی با شبکه، اینترنت، فایل، کانال، حافظه یا تنظیمات ندارند!
 POST_TAINT_ALLOWED_TOOLS = {
     "ask_clarification", "get_current_datetime",
@@ -506,7 +506,7 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
     """Execute dispatched tool and return stringified result to the ReAct agent."""
     from core import config
     try:
-        # ۱. قرنطینه امنیتی Taint: در صورتی که داده خارجی مصرف شده باشد، هیچ ابزار شبکه‌ای یا فایلی حق اجرا ندارد
+        # Sandbox isolation: prevent external tools from modifying sensitive local files
         if tainted and name not in POST_TAINT_ALLOWED_TOOLS:
             return (
                 f"⛔ قرنطینه امنیتی داده‌های خارجی (Taint Quarantine): "

@@ -896,7 +896,7 @@ def _is_web_question(q: str) -> bool:
     return any(w in q for w in _WEB_FRESH_WORDS)
 
 
-# کلمه‌هایی که نشان می‌دهند پیام یک «دستور ابزار» است (نه سوال ساده) و باید به ایجنت برود
+# Tool command routing keywords
 _TOOL_TRIGGER_WORDS = (
     "لفت", "عضو شو", "عضو شدم", "جوین", "پوشه", "فایل", "سند",
     "آهنگ", "اهنگ", "موزیک", "موسیقی", "بگیر بیار", "دانلود",
@@ -1016,7 +1016,7 @@ async def _handle_voice(event, status, msg, question) -> None:
             await status.edit(answer)
             return
 
-        # ۴. کاربر خودش ویس فرستاده و به عنوان پرامپت با کاپری صحبت کرده است (مکالمه صوتی دوطرفه)
+        # Voice message transcription & bidirectional voice chat
         if any(w in question.lower() for w in RESEARCH_WORDS):
             await _stage(status, "🔍 در حال کاوش سه‌زبانه (انگلیسی، چینی، فارسی) و تحلیل تخصصی...")
         else:
@@ -1776,7 +1776,7 @@ async def on_outgoing(event):
                     await event.reply("❌ خطایی در انجام عملیات رخ داد؛ لطفاً دوباره تلاش کنید.")
                 return
 
-    # طبق ضوابط امنیتی، در on_outgoing فقط پیام‌هایی پردازش می‌شوند که تریگر در ابتدای متن باشد
+    # Outgoing message trigger processing
     if not starts_with_trigger(text):
         return
 
@@ -1853,7 +1853,7 @@ async def on_outgoing(event):
             await _safe_edit_or_send(event, status, dash + f"\n\n🆔 شناسه یکتای نمونه: `{config.INSTANCE_ID}`")
             return
 
-        # خلاصه‌ساز صورتجلسه گروه/چت (مسیر مستقیم و مطمئن، مستقل از ایجنت)
+        # Chat minutes summarizer skill
         if _is_group_summary_request(question):
             from ai_engine import skills_manager
             await _stage(status, "📊 دارم پیام‌های اخیر رو می‌خونم و صورتجلسه می‌سازم...")
@@ -1875,7 +1875,7 @@ async def on_outgoing(event):
             await _safe_edit_or_send(event, status, result)
             return
 
-        # مرتب‌سازی خودکار پوشه‌ها (مسیر مستقیم و مطمئن، مستقل از ایجنت)
+        # Dialog folder classification
         if _is_folder_sort_request(question):
             await _stage(status, "🗂 دارم کانال‌ها و گروه‌ها رو بررسی و دسته‌بندی می‌کنم...")
             await _do_sort(event, status)
@@ -1902,7 +1902,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, f"📋 این کانال‌ها رو پیدا کردم:\n{names}\n\nکدام را لفت بزنم؟ بگویید «همه» یا شماره‌ها (مثلاً 1، 3).")
             return
 
-        # جستجوی عکس (مسیر مستقیم و سریع، مستقل از ایجنت)
+        # Image search dispatch
         if _is_image_request(question):
             query = _extract_image_query(question)
             await _stage(status, "🖼 دارم دنبال عکس می‌گردم...")
@@ -1919,7 +1919,7 @@ async def on_outgoing(event):
         if await vault.handle_vault_command(event, status, question):
             return
 
-        # حالت همزاد: فعال/غیرفعال (فقط مالک)
+        # Ghost mode toggle
         if _is_ghost_deactivate(question):
             ghost.deactivate()
             dnd.deactivate_dnd()
@@ -1943,7 +1943,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, summary)
             return
 
-        # تحلیل چت: گزارش داده‌محور از تاریخچه چت فعلی (مستقل از ایجنت)
+        # Chat analysis report
         if chatanalysis.is_chat_analysis_request(question):
             await _stage(status, "🕵️ دارم تاریخچه این چت رو کالبدشکافی می‌کنم...")
             report = await chatanalysis.analyze_chat(client, event)
@@ -1951,14 +1951,14 @@ async def on_outgoing(event):
             await _send_as_md(event, status, report)
             return
 
-        # ۲. کلیه پیام‌ها مستقیماً وارد ایجنت هوشمند می‌شوند و مدل خودش ابزار را تشخیص می‌دهد
+        # Agent message loop
         context = await get_context(event)
         hist = memory.load_history(event.chat_id)
         if hist:
             context = (hist + "\n\n" + context).strip()
         mem = memory.relevant_facts(question)
 
-        # جستجوی وب (مسیر مستقیم، سریع و با خروجی جمینای — مستقل از ایجنت کند)
+        # Web search dispatch
         if _is_web_question(question):
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
             raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem)
@@ -1970,7 +1970,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, answer, link_preview=False)
             return
 
-        # سوال ساده/گفتگویی (بدون ابزار) → پاسخ مستقیم و سریع با جمینای، بدون حلقه‌ی کند ایجنت
+        # Direct conversational query response
         if _is_simple_question(question):
             await _stage(status, "💭 دارم جواب می‌دم...")
             answer = await asyncio.to_thread(ai.answer_quick, question, context, mem)

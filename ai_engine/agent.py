@@ -827,7 +827,7 @@ async def run_agent(question: str, context: str, memory_str: str, event, client,
                 executed_calls[call_sig] = out_str
                 last_tool_output = out_str
 
-            # Mark tainted immediately after consuming untrusted external sources
+            # Flag external content for isolated context handling
             if name in tools.UNTRUSTED_SOURCE_TOOLS:
                 tainted = True
                 _last_run_tainted.set(True)
@@ -858,7 +858,7 @@ async def run_agent(question: str, context: str, memory_str: str, event, client,
     _last_run_tainted.set(tainted)
 
     # End of steps: final turn is strictly conversational text (no further tool execution)
-    # (Prevents prompt injection from attempting to invoke tools within the final synthesis).
+    # Final synthesis response formatting
     final_ans = await asyncio.to_thread(_final_answer_without_tools, messages)
     if final_ans:
         if tainted:

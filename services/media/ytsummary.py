@@ -135,7 +135,7 @@ def summarize_youtube_video(video_url_or_id: str) -> str:
     except Exception as e:
         log.warning(f"Web search for youtube summary failed: {e}")
 
-    # ۴. تجمیع زمینه برای هوش مصنوعی
+    # Context aggregation
     context_parts = []
     context_parts.append(f"شناسه ویدیو: {vid}")
     if title:
@@ -159,7 +159,7 @@ def summarize_youtube_video(video_url_or_id: str) -> str:
     if not title and not description and not search_context:
         return f"❌ متأسفانه اطلاعاتی برای ویدیوی یوتیوب `{vid}` یافت نشد (احتمالاً ویدیو خصوصی یا حذف شده است)."
 
-    # ۵. دستور خلاصه سازی برای هوش مصنوعی
+    # Summary generation prompt
     prompt = (
         "تو کاپری (Capri) هستی. یک ویدیوی یوتیوب با اطلاعات زیر در اختیارت قرار گرفته است:\n\n"
         f"{full_context}\n\n"

@@ -120,7 +120,7 @@ async def build_briefing(client):
     if summary:
         return header + "\n\n" + summary
 
-    # پشتیبان بدون AI
+    # Heuristic fallback
     lines = [header]
     for p in pv:
         lines.append(f"💬 {p['name']}: {p['unread']} پیام نخوانده")

@@ -725,7 +725,7 @@ async def follow_bot(
             await asyncio.sleep(2.5)
             continue
 
-        # 10) ناوبری با هوش مصنوعی برای دکمه‌ها یا دستورات متنی (بدون دکمه‌های بازگشت)
+        # Dynamic button and inline command navigation
         from services.media import ai_nav
         try:
             state = {"files_count": len(files), "history": [str(c) for c in clicked], "step": _}
