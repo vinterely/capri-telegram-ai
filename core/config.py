@@ -1,4 +1,6 @@
 import os
+import uuid
+
 from dotenv import load_dotenv
 
 VERSION = "2.0.0"
@@ -36,8 +38,12 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 HOOSHIA_API_KEY = os.getenv("HOOSHIA_API_KEY", "").strip()
 INCEPTION_API_KEY = os.getenv("INCEPTION_API_KEY", "").strip()
+ANYAPI_KEY = os.getenv("ANYAPI_KEY", "").strip()
+BAI_KEY = os.getenv("BAI_KEY", "").strip()
+XKIRO_KEY = os.getenv("XKIRO_KEY", "").strip()
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
 ALLOW_SKILL_CREATION = os.getenv("ALLOW_SKILL_CREATION", "0").strip() == "1"
+SOCIAL_DL_BOT = os.getenv("SOCIAL_DL_BOT", "@MooNDLBoT").strip()
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 SESSION_FILE = os.path.join(BASE_DIR, "session")
 PROXY_TYPE = os.getenv("PROXY_TYPE", "").strip().lower()
@@ -61,6 +67,26 @@ def get_http_proxy_url():
     if PROXY_USER:
         return f"{scheme}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
     return f"{scheme}://{PROXY_HOST}:{PROXY_PORT}"
+
+def _load_instance_id() -> str:
+    """شناسه یکتای پایدار این نمونه از ربات (بار اول ساخته و در فایل ذخیره می‌شود)."""
+    path = os.path.join(BASE_DIR, "instance.id")
+    try:
+        with open(path, encoding="utf-8") as f:
+            val = f.read().strip()
+        if val:
+            return val
+    except OSError:
+        pass
+    new_id = uuid.uuid4().hex
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_id)
+    except OSError:
+        pass
+    return new_id
+
+INSTANCE_ID = _load_instance_id()
 
 def validate() -> None:
     """Validate core configuration parameters on startup."""

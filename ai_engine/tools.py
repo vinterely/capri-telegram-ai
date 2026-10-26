@@ -34,9 +34,9 @@ POST_TAINT_ALLOWED_TOOLS = {
 READ_ONLY_TOOLS = POST_TAINT_ALLOWED_TOOLS  # جهت سازگاری کامل
 
 UNTRUSTED_SOURCE_TOOLS = {
-    "web_search", "read_webpage", "summarize_youtube_video", "search_channel_files",
+    "web_search", "deep_search", "read_webpage", "summarize_youtube_video", "search_channel_files",
     "search_in_channel", "get_daily_briefing", "vibe_check", "read_channel_posts",
-    "search_music", "fetch_and_forward_movie",
+    "search_music", "fetch_and_forward_movie", "download_social_media",
 }
 TOOL_DEFINITIONS = [
     {
@@ -48,6 +48,20 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "عبارت جستجو."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "deep_search",
+            "description": "جستجوی عمیق و چندزبانه (انگلیسی، چینی، فارسی) در وب برای موضوعات تخصصی، ترفندها و مستندات دقیق. وقتی جستجوی معمولی کافی نبود یا موضوع فنی/پیچیده است.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "موضوع یا سوال تخصصی برای جستجوی عمیق."}
                 },
                 "required": ["query"]
             }
@@ -246,6 +260,20 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "url": {"type": "string", "description": "لینک ویدیوی یوتیوب."},
                     "quality": {"type": "integer", "description": "کیفیت عددی مانند 1080، 720، 480."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "download_social_media",
+            "description": "دانلود ویدیو/پست/آهنگ از لینک تیک‌تاک، اینستاگرام، پینترست، توییتر/ایکس یا ساوندکلاد. لینک را به ربات دانلود می‌فرستد و فایل را در چت فوروارد می‌کند.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "لینک کامل پست/ویدیو از تیک‌تاک، اینستاگرام، پینترست، توییتر/ایکس یا ساوندکلاد."}
                 },
                 "required": ["url"]
             }
@@ -514,6 +542,17 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
             if not results:
                 return "هیچ نتیجه‌ای در جستجوی اینترنت یافت نشد."
             return gsearch.format_search_results(results)
+
+        elif name == "deep_search":
+            query = args.get("query", "").strip()
+            if not query:
+                return "خطا: عبارت جستجو خالی است."
+            if status:
+                try:
+                    await status.edit(f"🔎 در حال جستجوی عمیق چندزبانه برای: «{query}»...")
+                except Exception:
+                    pass
+            return await asyncio.to_thread(gsearch.multilingual_deep_search, query)
 
         elif name == "search_channel_files":
             query = args.get("query", "").strip()
@@ -852,6 +891,13 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
                 q_val = 720
             from services.media import ytdownload
             return await ytdownload.download_youtube_video(client, url, quality=q_val, event=event, status=status)
+
+        elif name == "download_social_media":
+            url = args.get("url", "").strip()
+            if not url:
+                return "خطا: لینک دانلود مشخص نشده است."
+            from services.media import socialdl
+            return await socialdl.download_social(client, url, event=event, status=status)
 
         elif name == "send_voice_note":
             text = args.get("text", "").strip()

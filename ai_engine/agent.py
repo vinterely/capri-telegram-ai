@@ -12,6 +12,10 @@ from ai_engine import prompts
 from ai_engine import providers
 from core import settings
 from ai_engine import tools
+from ai_engine import provider_xkiro
+from ai_engine import provider_bai
+from ai_engine import provider_anyapi
+from ai_engine import provider_openrouter
 
 log = logger.get_logger(__name__)
 
@@ -359,6 +363,59 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
     """
     # 1. Primary priority: user-selected model in settings.json
     sel_service, sel_model = settings.get_selection()
+
+    if sel_service == "xkiro" and sel_model and config.XKIRO_KEY:
+        key = f"xkiro:{sel_model}"
+        if breaker.is_available(key):
+            try:
+                res = provider_xkiro.call_tools(messages, sel_model, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices") and len(res["choices"]) > 0:
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+
+    if sel_service == "bai" and sel_model and config.BAI_KEY:
+        key = f"bai:{sel_model}"
+        if breaker.is_available(key):
+            try:
+                res = provider_bai.call_tools(messages, sel_model, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices") and len(res["choices"]) > 0:
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+
+    if sel_service == "anyapi" and sel_model and config.ANYAPI_KEY:
+        key = f"anyapi:{sel_model}"
+        if breaker.is_available(key):
+            try:
+                res = provider_anyapi.call_tools(messages, sel_model, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices") and len(res["choices"]) > 0:
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+
+    if sel_service == "openrouter" and sel_model and config.OPENROUTER_API_KEY:
+        key = f"openrouter:{sel_model}"
+        if breaker.is_available(key):
+            try:
+                res = provider_openrouter.call_tools(messages, sel_model, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 1500)
+                if res and res.get("choices") and len(res["choices"]) > 0:
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+
     if sel_service == "hooshia" and sel_model and config.HOOSHIA_API_KEY:
         key = f"hooshia:{sel_model}"
         if breaker.is_available(key):
@@ -430,6 +487,9 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
     # 4. Automatic fallback chain across tool-enabled models
     # Sort candidates by recent health: most recently successful provider is tried first.
     fallback_models = [
+        ("xkiro", "openai/gpt-6.1-sol"),
+        ("anyapi", "google/gemini-3.6-flash"),
+        ("bai", "GPT-6.1 Sol"),
         ("inception", "mercury-3"),
         ("groq", "openai/gpt-oss-120b"),
         ("groq", "openai/gpt-oss-20b"),
@@ -442,9 +502,39 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
         key = f"{srv}:{m}"
         if not breaker.is_available(key):
             continue
-        if srv == "openrouter" and config.OPENROUTER_API_KEY:
+        if srv == "xkiro" and config.XKIRO_KEY:
             try:
-                res = _call_openrouter_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 1500)
+                res = provider_xkiro.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices"):
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+        elif srv == "anyapi" and config.ANYAPI_KEY:
+            try:
+                res = provider_anyapi.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices"):
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+        elif srv == "bai" and config.BAI_KEY:
+            try:
+                res = provider_bai.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
+                if res and res.get("choices"):
+                    breaker.record_success(key)
+                    _last_healthy[key] = time.time()
+                    return res["choices"][0]["message"]
+            except Exception as e:
+                breaker.record_failure(key)
+                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+        elif srv == "openrouter" and config.OPENROUTER_API_KEY:
+            try:
+                res = provider_openrouter.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 1500)
                 if res and res.get("choices"):
                     breaker.record_success(key)
                     _last_healthy[key] = time.time()

@@ -852,7 +852,7 @@ def _extract_rewrite_text(q: str) -> str:
     return " ".join(q.split()).strip("،,:.؟?! «»\"' ")
 
 
-_IMAGE_QUERY_WORDS = ("عکس", "تصویر", "پوستر")
+_IMAGE_QUERY_WORDS = ("سعکس", "تصویر", "پوستر")
 _IMAGE_ACTION_WORDS = (
     "نشونم بده", "نشون بده", "نشان بده", "پیداش کن", "پیدا کن", "بفرستش",
     "بفرست", "بده", "بذار", "بزار", "بگرد", "میخوام", "میخام", "لطفا", "لطفاً",
@@ -1402,7 +1402,8 @@ async def _confirm_model(event, status, service, model_id, note: str = ""):
         e = models.find(service, model_id)
         if e:
             settings.set_selection(service, model_id)
-            msg = (f"✅ مدل فعال شد: **{e['name']}**\n"
+            uid_str = f" (شناسه: `{e['uid']}`)" if e.get("uid") else ""
+            msg = (f"✅ مدل فعال شد: **{e['name']}**{uid_str}\n"
                    f"سرویس: {models.service_name(service)}\n`{model_id}`\n\n"
                    f"{e['desc']}")
             await status.edit(msg)
@@ -1412,7 +1413,8 @@ async def _confirm_model(event, status, service, model_id, note: str = ""):
         return
     settings.set_selection(service, model_id)
     e = models.find(service, model_id)
-    msg = (f"✅ مدل فعال شد: **{e['name'] if e else model_id}**\n"
+    uid_str = f" (شناسه: `{e['uid']}`)" if e and e.get("uid") else ""
+    msg = (f"✅ مدل فعال شد: **{e['name'] if e else model_id}**{uid_str}\n"
            f"سرویس: {models.service_name(service)}\n`{model_id}`\n\n"
            f"{e['desc'] if e else ''}")
     if note:
@@ -1730,6 +1732,18 @@ async def on_outgoing(event):
         status = await event.reply("🧠 در حال جمع‌آوری اطلاعات...")
         self_sent.add(status.id)
 
+        # دانلود خودکار لینک شبکه‌های اجتماعی (تیک‌تاک/اینستا/پینترست/توییتر/ساندکلاد)
+        from services.media import socialdl
+        social_url = socialdl.extract_social_url(question)
+        if social_url:
+            await _stage(status, "⬇️ لینک دانلود را تشخیص دادم؛ دارم فایل را می‌گیرم...")
+            try:
+                result = await socialdl.download_social(client, social_url, event=event, status=status)
+            except Exception as e:
+                result = f"❌ خطا در دانلود: {logger.redact_secrets(str(e))}"
+            await _safe_edit_or_send(event, status, result)
+            return
+
         # حالت رول‌پلی (راوی تعاملی): شروع/پایان/نگه‌داشتن/ادامه + تمام پیام‌های حین بازی
         if await roleplay.handle(event, status, question, client):
             return
@@ -1764,7 +1778,7 @@ async def on_outgoing(event):
                 active_model=ai.model_label(settings.get_model()),
                 voice_str=getattr(settings, "get_voice_speaker", lambda: "دلارا")() or "دلارا"
             )
-            await _safe_edit_or_send(event, status, dash)
+            await _safe_edit_or_send(event, status, dash + f"\n\n🆔 شناسه یکتای نمونه: `{config.INSTANCE_ID}`")
             return
 
         # خلاصه‌ساز صورتجلسه گروه/چت (مسیر مستقیم و مطمئن، مستقل از ایجنت)

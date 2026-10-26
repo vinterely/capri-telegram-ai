@@ -255,7 +255,28 @@ def _layer_inception(system, user):
         INCEPTION_MODELS, config.INCEPTION_API_KEY, "Inception", system, user, timeout=40, max_tokens=2048)
 
 
+def _layer_xkiro(system, user):
+    from ai_engine import provider_xkiro
+    text = provider_xkiro.call_chat(provider_xkiro.DEFAULT_MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    return (text, f"Xkiro-{provider_xkiro.DEFAULT_MODEL}") if text else (None, None)
+
+
+def _layer_bai(system, user):
+    from ai_engine import provider_bai
+    text = provider_bai.call_chat(provider_bai.DEFAULT_MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    return (text, f"BAI-{provider_bai.DEFAULT_MODEL}") if text else (None, None)
+
+
+def _layer_anyapi(system, user):
+    from ai_engine import provider_anyapi
+    text = provider_anyapi.call_chat(provider_anyapi.DEFAULT_MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+    return (text, f"AnyAPI-{provider_anyapi.DEFAULT_MODEL}") if text else (None, None)
+
+
 LAYERS = {
+    "xkiro": _layer_xkiro,
+    "bai": _layer_bai,
+    "anyapi": _layer_anyapi,
     "cohere": _layer_cohere,
     "freemodel": _layer_freemodel,
     "hf": _layer_hf,
@@ -266,7 +287,7 @@ LAYERS = {
     "inception": _layer_inception,
 }
 
-FALLBACK_ORDER = ["hooshia", "inception", "cohere", "openrouter", "groq", "freemodel", "hf", "github"]
+FALLBACK_ORDER = ["xkiro", "anyapi", "bai", "hooshia", "inception", "openrouter", "groq", "cohere", "freemodel", "hf", "github"]
 
 
 def ask_layer(name: str, system: str, user: str):
@@ -279,15 +300,26 @@ def ask_layer(name: str, system: str, user: str):
 def ask_model(service: str, model: str, system: str, user: str):
     """یه مدل خاص از یه سرویس رو صدا می‌زنه. (text, source) یا (None, None)."""
     s = (service or "").lower()
+    if s == "xkiro":
+        from ai_engine import provider_xkiro
+        text = provider_xkiro.call_chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return (text, f"Xkiro-{model}") if text else (None, None)
+    if s == "bai":
+        from ai_engine import provider_bai
+        text = provider_bai.call_chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return (text, f"BAI-{model}") if text else (None, None)
+    if s == "anyapi":
+        from ai_engine import provider_anyapi
+        text = provider_anyapi.call_chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return (text, f"AnyAPI-{model}") if text else (None, None)
+    if s == "openrouter":
+        from ai_engine import provider_openrouter
+        text = provider_openrouter.call_chat(model, [{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return (text, f"OpenRouter-{model}") if text else (None, None)
     if s == "groq":
         return _layer_openai(
             "https://api.groq.com/openai/v1/chat/completions",
             [model], config.GROQ_API_KEY, "Groq", system, user)
-    if s == "openrouter":
-        return _layer_openai(
-            "https://openrouter.ai/api/v1/chat/completions",
-            [model], config.OPENROUTER_API_KEY, "OpenRouter", system, user,
-            extra_headers={"HTTP-Referer": "https://github.com", "X-Title": "Capri"})
     if s == "hooshia":
         return _layer_openai(
             "https://hooshia.com/api/v1/chat/completions",
