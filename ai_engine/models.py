@@ -127,20 +127,28 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+def _word_match(pattern: str, text: str) -> bool:
+    """Match exact whole words with unicode-aware Persian/English boundaries to prevent substring overlaps."""
+    p = rf"(?<![a-zA-Z0-9\u0600-\u06FF]){re.escape(pattern)}(?![a-zA-Z0-9\u0600-\u06FF])"
+    return bool(re.search(p, text, re.IGNORECASE))
+
+
 def _detect_service(t: str):
-    if any(s in t for s in ("xkiro", "کیرو", "خیرو")):
+    if any(_word_match(s, t) for s in ("xkiro", "کیرو", "خیرو")):
         return "xkiro"
-    if any(s in t for s in ("bai", "بای", "بی ای", "بی‌ای")):
+    # "bai" colloquially means "bye" in Persian; require explicit service prefix or English token
+    if any(_word_match(s, t) for s in ("bai", "api.b.ai", "b.ai", "بی ای", "بی‌ای", "سرویس بای", "پرووایدر بای", "مدل بای")):
         return "bai"
-    if any(s in t for s in ("anyapi", "انی", "انو", "انی ای پی آی", "انی‌پی‌آی", "انی پی آی", "any")):
+    # "ani" appears inside Persian words like "irani" or names; require explicit API keywords
+    if any(_word_match(s, t) for s in ("anyapi", "any-api", "any api", "انی ای پی آی", "انی‌پی‌آی", "انی پی آی", "سرویس انی", "پرووایدر انی", "مدل انی")):
         return "anyapi"
-    if any(s in t for s in ("openrouter", "اوپن روتر", "اوپنروتر", "اوپن راتر", "اوپنراتر", "اوپن")):
+    if any(_word_match(s, t) for s in ("openrouter", "اوپن روتر", "اوپنروتر", "اوپن راتر", "اوپنراتر", "اوپن‌روتر")):
         return "openrouter"
-    if any(s in t for s in ("groq", "گروک", "گروق")):
+    if any(_word_match(s, t) for s in ("groq", "گروک", "گروق")):
         return "groq"
-    if any(s in t for s in ("hooshia", "هوشیا")):
+    if any(_word_match(s, t) for s in ("hooshia", "هوشیا")):
         return "hooshia"
-    if any(s in t for s in ("inception", "اینسپشن", "اینسبشن", "مرکوری", "mercury", "عطارد")):
+    if any(_word_match(s, t) for s in ("inception", "اینسپشن", "اینسبشن", "مرکوری", "mercury", "عطارد")):
         return "inception"
     return None
 
@@ -174,13 +182,6 @@ def _find_model(text: str):
 
     lt = clean_text.lower()
 
-    m_uid = re.search(r"\b([kbaoghie][0-9]{1,3})\b", lt)
-    if m_uid:
-        uid_cand = m_uid.group(1)
-        if uid_cand in UID_MAP:
-            srv, mid, _ = UID_MAP[uid_cand]
-            return srv, mid
-
     m_id = re.search(r"\b([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-\.:]+)\b", clean_text)
     if m_id:
         cand_id = m_id.group(1).lower()
@@ -207,14 +208,14 @@ def _find_model(text: str):
         ("مرکوری", "inception", "mercury-3"),
     ]
     for kw, serv, m_id in SHORTCUTS:
-        if kw in nt:
+        if _word_match(kw, nt):
             return serv, m_id
 
     return None
 
 
 def parse_request(text: str):
-    """دستور طبیعی انتخاب/نمایش مدل را تشخیص می‌دهد."""
+    """Parse natural language model switching, information, or catalog display requests."""
     no_urls = re.sub(r"https?://\S+", "", text).strip()
     if not no_urls:
         return None
@@ -233,33 +234,35 @@ def parse_request(text: str):
     service = _detect_service(t)
     MODEL_TRIGGERS = (
         "مدل", "model", "سوییچ", "سوئیچ", "برو رو", "برو روی",
-        "بذار رو", "بزار رو", "بذار روی", "بزار روی", "فعال کن", "عوض کن", "تغییر بده"
+        "بذار رو", "بزار رو", "بذار روی", "بزار روی", "فعال کن", "عوض کن", "تغییر بده", "ست کن"
     )
-    model_intent = any(w in t for w in MODEL_TRIGGERS) or service is not None
+    model_intent = any(w in t for w in MODEL_TRIGGERS)
 
-    # بررسی مستقیم UID (مثال: k1, a5, کاپری مدل b12, برو رو o3)
+    # Check direct UID match (e.g. k1, a5, b12, o3) with model switching intent guard
     m_uid = re.search(r"\b([kbaoghie][0-9]{1,3})\b", t)
     if m_uid:
         uid_cand = m_uid.group(1)
-        if uid_cand in UID_MAP:
+        tokens = t.strip().split()
+        is_bare_uid = len(tokens) <= 2 and any(tok == uid_cand for tok in tokens)
+        if (model_intent or is_bare_uid) and uid_cand in UID_MAP:
             srv, mid, _ = UID_MAP[uid_cand]
             return {"action": "select", "service": srv, "model": mid, "uid": uid_cand}
 
-    # اگر کاربر درخواست لیست/نمایش مدل‌ها را داده باشد
+    # Model catalog listing intent
     if _list_intent(t):
         if any(w in t for w in ("مدلارو بده", "مدلا رو بده", "مدلا", "مدل ها", "مدلها", "چه مدلایی", "کدوم مدلا", "لیست مدلا", "لیست مدلها", "کاتالوگ")):
             return {"action": "list", "service": service}
-        if service:
+        if service and model_intent:
             return {"action": "list", "service": service}
 
-    # اگر کاربر نام سرویس را گفته باشد (مثلا: کاپری مدل کیرو / کاپری مدل بای / کاپری مدل انی / کاپری مدل اوپن روتر)
-    if service:
-        sub = re.sub(r".*?\b(کیرو|خیرو|xkiro|بای|بی ای|بی‌ای|bai|انی|انو|anyapi|اوپن روتر|اوپنروتر|openrouter|گروک|groq|هوشیا|hooshia|اینسپشن|inception)\b", "", t).strip()
+    # Model selection via explicit service name with intent
+    if service and model_intent:
+        sub = re.sub(r".*?\b(کیرو|خیرو|xkiro|بای|بی ای|بی‌ای|bai|انی|anyapi|اوپن روتر|اوپنروتر|openrouter|گروک|groq|هوشیا|hooshia|اینسپشن|inception)\b", "", t).strip()
         if sub:
             matched_mid = _match_model_in_service(service, sub)
             if matched_mid:
                 return {"action": "select", "service": service, "model": matched_mid}
-        # انتخاب مدل پرچمدار پیش‌فرض سرویس
+        # Select default flagship model of the provider
         defaults = {
             "xkiro": provider_xkiro.DEFAULT_MODEL,
             "bai": provider_bai.DEFAULT_MODEL,
@@ -285,7 +288,7 @@ def parse_request(text: str):
     hit = _find_model(no_urls)
     if hit:
         words_count = len(no_urls.split())
-        if model_intent or words_count <= 4:
+        if model_intent or words_count <= 2:
             return {"action": "select", "service": hit[0], "model": hit[1]}
 
     return None

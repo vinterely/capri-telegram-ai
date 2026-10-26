@@ -750,7 +750,7 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                         break
             return all_collected, None
 
-        # Media download flow handler
+        # کنترل خودمختار هوش مصنوعی ۰ تا ۱۰۰
         nav_state = {
             "files_count": len(all_collected),
             "history": action_history,
@@ -844,7 +844,7 @@ async def execute_bot_navigation(client, bot_name: str, start_msg, req: Dict[str
                     return all_collected, None
                 continue
 
-        # Button matching fallback handler
+        # فال‌بک تطابق دکمه در صورت عدم انتخاب مشخص توسط هوش مصنوعی
         if cur_msg.buttons:
             best_b = match_preferred_button(cur_msg.buttons, req)
             if best_b and getattr(best_b, "data", None):

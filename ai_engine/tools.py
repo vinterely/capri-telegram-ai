@@ -26,7 +26,7 @@ STRANGER_ALLOWED_TOOLS = {
     "roast_target", "vibe_check", "generate_meme", "ask_clarification",
 }
 
-# Allowed tools for external content processing:
+# ابزارهای مجاز پس از مصرف محتوای خارجی غیرقابل‌اعتماد (Taint Quarantine):
 # فقط ابزارهای کاملاً امن و ایزوله که هیچ تماسی با شبکه، اینترنت، فایل، کانال، حافظه یا تنظیمات ندارند!
 POST_TAINT_ALLOWED_TOOLS = {
     "ask_clarification", "get_current_datetime",
@@ -34,7 +34,7 @@ POST_TAINT_ALLOWED_TOOLS = {
 READ_ONLY_TOOLS = POST_TAINT_ALLOWED_TOOLS  # جهت سازگاری کامل
 
 UNTRUSTED_SOURCE_TOOLS = {
-    "web_search", "deep_search", "read_webpage", "summarize_youtube_video", "search_channel_files",
+    "web_search", "deep_search", "read_webpage", "summarize_youtube_video", "get_youtube_video_info", "search_channel_files",
     "search_in_channel", "get_daily_briefing", "vibe_check", "read_channel_posts",
     "search_music", "fetch_and_forward_movie", "download_social_media",
 }
@@ -43,7 +43,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "جستجو در وب برای اخبار روز، قیمت‌ها، وقایع، مشخصات فنی یا اطلاعاتی که از صحت آن مطمئن نیستی.",
+            "description": "جستجو در وب برای اخبار روز، قیمت‌ها، وقایع، مشخصات فنی یا اطلاعاتی که از صحت آن مطمئن نیستی. هرگز برای دانلود فایل، دانلود ویدیو یا باز کردن مستقیم لینک‌های مشخص وب فراخوانی نشود.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -116,7 +116,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "fetch_and_forward_movie",
-            "description": "دریافت و ارسال مستقیم فایل فیلم یا سریال از بات‌های تلگرام. فقط وقتی کاربر صریحاً دستور دانلود/ارسال فایل فیلم می‌دهد (نه برای نقد، تحلیل یا سوالات عمومی).",
+            "description": "جستجو و ارسال مستقیم فایل فیلم یا سریال از بات‌های تلگرام. فقط و فقط وقتی کاربر صریحاً دستور دانلود/ارسال فایل فیلم یا سریال می‌دهد. هرگز برای نقد، تحلیل، سوالات عمومی، خلاصه‌سازی و یا لینک‌های یوتیوب و شبکه‌های اجتماعی فراخوانی نشود.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -149,12 +149,13 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "manage_memory",
-            "description": "مدیریت حافظه ماندگار (افزودن، حذف، لیست یا پاکسازی علایق و مشخصات کاربر).",
+            "description": "مدیریت حافظه ماندگار این گفتگو (افزودن، حذف، لیست یا پاکسازی علایق و مشخصات کاربر منحصراً در فضای همین چت).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["add", "remove", "list", "clear"], "description": "عملیات حافظه."},
-                    "fact": {"type": "string", "description": "متن واقعیت برای add یا remove."}
+                    "action": {"type": "string", "enum": ["add", "remove", "list", "clear", "transfer"], "description": "عملیات حافظه."},
+                    "fact": {"type": "string", "description": "متن واقعیت برای add یا remove یا transfer."},
+                    "target_chat": {"type": "string", "description": "شناسه یا عنوان گفتگوی مقصد برای انتقال صریح (منحصراً در action='transfer')."}
                 },
                 "required": ["action"]
             }
@@ -240,7 +241,21 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "summarize_youtube_video",
-            "description": "استخراج زیرنویس و خلاصه متنی ویدیوی یوتیوب از روی لینک.",
+            "description": "خلاصه‌سازی هوشمند و متنی محتوای ویدیوی یوتیوب بدون مصرف حجم و بدون دانلود فایل ویدیو. فقط وقتی کاربر خلاصه، نکات مهم، چکیده یا بررسی محتوای ویدیوی یوتیوب را خواسته است. هرگز برای دانلود ویدیو یا سوالات عمومی تاریخی بدون لینک یوتیوب فراخوانی نشود.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "لینک کامل یا شناسه ویدیو در یوتیوب."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_youtube_video_info",
+            "description": "دریافت اطلاعات، مشخصات و متادیتای ویدیوی یوتیوب (عنوان، نام کانال، مدت زمان، تاریخ انتشار، تعداد بازدید و لایک) بدون دانلود ویدیو و بدون خلاصه‌سازی کامل متن. فقط وقتی کاربر مشخصات، مدت زمان یا اطلاعات یک لینک یوتیوب را می‌خواهد.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -254,7 +269,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "download_youtube_video",
-            "description": "دانلود و ارسال فایل ویدیوی یوتیوب در چت با کیفیت دلخواه (پیش‌فرض 720p). فقط وقتی کاربر دستور دانلود یا فایل ویدیو می‌خواهد.",
+            "description": "دانلود و ارسال فایل ویدیوی یوتیوب در چت با کیفیت دلخواه (پیش‌فرض 720p). فقط و فقط وقتی کاربر صریحاً دستور دانلود یا دریافت فایل ویدیو را داده است (مانند «دانلود کن»، «فایل ویدیو رو بفرست»). هرگز برای خلاصه‌سازی، دریافت مشخصات یا سوالات تئوری فراخوانی نشود.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -269,7 +284,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "download_social_media",
-            "description": "دانلود ویدیو/پست/آهنگ از لینک تیک‌تاک، اینستاگرام، پینترست، توییتر/ایکس یا ساوندکلاد. لینک را به ربات دانلود می‌فرستد و فایل را در چت فوروارد می‌کند.",
+            "description": "دانلود ویدیو/پست/آهنگ از شبکه‌های اجتماعی (اینستاگرام، تیک‌تاک، پینترست، توییتر/ایکس یا ساوندکلاد) و فوروارد مستقیم فایل به چت. فقط وقتی کاربر صریحاً دستور دانلود فایل از این شبکه‌ها را دارد یا لینک مستقیم بدون پرسش فرستاده است (نه برای یوتیوب و نه برای سوالات متنی یا خلاصه‌سازی).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -506,7 +521,7 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
     """Execute dispatched tool and return stringified result to the ReAct agent."""
     from core import config
     try:
-        # Sandbox isolation: prevent external tools from modifying sensitive local files
+        # ۱. قرنطینه امنیتی Taint: در صورتی که داده خارجی مصرف شده باشد، هیچ ابزار شبکه‌ای یا فایلی حق اجرا ندارد
         if tainted and name not in POST_TAINT_ALLOWED_TOOLS:
             return (
                 f"⛔ قرنطینه امنیتی داده‌های خارجی (Taint Quarantine): "
@@ -597,8 +612,9 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
                 await status.edit(f"🎵 Deezer جواب نداد ({derr})؛ دارم توی کانال‌ها می‌گردم: «{query}»...")
             results = await search.find_files(client, query, limit=3, kind="music")
             if not results:
-                return f"هیچ آهنگی با نام یا خواننده «{query}» پیدا نشد (نه در Deezer نه در کانال‌ها)."
+                return f"❌ خطا در یافتن آهنگ: هیچ آهنگی با نام یا خواننده «{query}» پیدا نشد (نه در Deezer نه در کانال‌ها)."
             sent = 0
+            send_errors = []
             for r in results:
                 m = r.get("msg")
                 if getattr(m, "media", None):
@@ -606,10 +622,12 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
                         await client.send_file(event.chat_id, m.media, caption=r.get("name") or None)
                         sent += 1
                         await asyncio.sleep(0.6)
-                    except Exception:
+                    except Exception as err:
+                        send_errors.append(str(err))
                         continue
             if not sent:
-                return f"آهنگی برای «{query}» پیدا شد ولی ارسالش ممکن نشد."
+                err_detail = f" ({send_errors[0]})" if send_errors else ""
+                return f"❌ خطا در ارسال تلگرام: آهنگ «{query}» پیدا شد اما ارسال آن به چت با خطا مواجه شد{err_detail}."
             return f"تعداد {sent} آهنگ برای «{query}» پیدا و ارسال شد (بدون نمایش منبع)."
 
         elif name == "search_in_channel":
@@ -719,31 +737,56 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
             if not getattr(event, "out", False):
                 owner_str = f" ({config.OWNER_NAME})" if config.OWNER_NAME else ""
                 return f"خطای دسترسی: حافظه و قوانین دستیار فقط توسط صاحب اکانت{owner_str} قابل تغییر است و اشخاص دیگر اجازه تعیین قانون یا ذخیره حافظه را ندارند."
+            
+            # استخراج قطعی و امن فضای حافظه از کانتکست معتبر رویداد تلگرام (پیشگیری از نشت و جعل شناسه توسط مدل)
+            scope_id = memory.get_event_memory_scope(event)
             act = args.get("action", "")
             fact = args.get("fact", "").strip()
+            
             if act == "add":
                 if not fact:
                     return "خطا: متنی برای ذخیره داده نشد."
                 import bot
                 chat_key = str(event.chat_id)
-                bot.pending[chat_key] = {"kind": "confirm_add_memory", "fact": fact, "ts": time.time()}
-                return f"⚠️ برای ذخیره «{fact}» در حافظه بلندمدت، تایید شما لازم است. لطفاً برای تایید بگویید «آره» یا برای لغو «نه»."
+                bot.pending[chat_key] = {
+                    "kind": "confirm_add_memory",
+                    "fact": fact,
+                    "scope_id": scope_id,
+                    "chat_id": event.chat_id,
+                    "ts": time.time()
+                }
+                return f"⚠️ برای ذخیره «{fact}» در حافظه این گفتگو، تایید شما لازم است. لطفاً برای تایید بگویید «آره» یا برای لغو «نه»."
             elif act == "remove":
                 if not fact:
                     return "خطا: موضوع برای حذف مشخص نشده."
-                removed = memory.remove_memory(fact)
+                removed = memory.remove_memory(fact, scope_id=scope_id)
                 if removed:
-                    return f"از حافظه پاک شد: {', '.join(removed)}"
-                return "موردی شبیه این در حافظه نبود."
+                    return f"از حافظه این گفتگو پاک شد: {', '.join(removed)}"
+                return "موردی شبیه این در حافظه این گفتگو نبود."
             elif act == "list":
-                facts = memory.list_facts()
+                facts = memory.list_facts(scope_id=scope_id)
                 if not facts:
-                    return "حافظه در حال حاضر خالی است."
-                return "چیزهایی که در حافظه ثبت شده است:\n" + "\n".join(f"- {f}" for f in facts)
+                    return "حافظه این گفتگو در حال حاضر خالی است."
+                return "چیزهایی که در حافظه این گفتگو ثبت شده است:\n" + "\n".join(f"- {f}" for f in facts)
             elif act == "clear":
                 import bot
-                bot.pending[str(event.chat_id)] = {"kind": "confirm_clear_memory"}
+                chat_key = str(event.chat_id)
+                bot.pending[chat_key] = {
+                    "kind": "confirm_clear_memory",
+                    "scope_id": scope_id,
+                    "chat_id": event.chat_id,
+                    "ts": time.time()
+                }
                 return "⚠️ آیا مطمئنید می‌خواهید کل حافظه ماندگار را پاک کنید؟ (بگویید «آره» یا «نه»)"
+            elif act == "transfer":
+                target_chat = args.get("target_chat", "").strip()
+                if not target_chat:
+                    return "خطا: گفتگوی مقصد برای انتقال مشخص نشده است."
+                target_scope = memory.normalize_scope_id(target_chat)
+                transferred = memory.transfer_memory(fact, source_scope_id=scope_id, target_scope_id=target_scope, is_authorized=True)
+                if transferred:
+                    return f"✅ واقعیت «{transferred.content}» با موفقیت از این گفتگو به گفتگوی مقصد منتقل شد."
+                return "خطا: انتقال حافظه ناموفق بود (یا واقعیت در حافظه این گفتگو یافت نشد یا دسترسی نامعتبر است)."
             return "عملیات حافظه نامعتبر است."
 
         elif name == "manage_channel_membership":
@@ -879,6 +922,18 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
             summary = await asyncio.to_thread(ytsummary.summarize_youtube_video, url)
             return summary
 
+        elif name == "get_youtube_video_info":
+            url = args.get("url", "").strip()
+            if not url:
+                return "خطا: آدرس یا لینک یوتیوب مشخص نشده است."
+            if status:
+                try:
+                    await status.edit("🎬 در حال دریافت متادیتا و اطلاعات ویدیوی یوتیوب...")
+                except Exception:
+                    pass
+            from services.media import ytsummary
+            return await asyncio.to_thread(ytsummary.get_youtube_video_info, url)
+
         elif name == "download_youtube_video":
             url = args.get("url", "").strip()
             quality = args.get("quality")
@@ -934,9 +989,17 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
             if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
                 reply_to_id = getattr(event, "message", None)
                 reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
-                import bot
-                bot.self_sent.add(vmsg.id)
+                try:
+                    vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
+                    import bot
+                    bot.self_sent.add(vmsg.id)
+                except Exception as send_err:
+                    try:
+                        os.remove(mp3)
+                        os.remove(ogg)
+                    except Exception:
+                        pass
+                    return f"❌ خطا در ارسال تلگرام: ویس با موفقیت ضبط شد اما ارسال آن به چت با خطا مواجه شد ({send_err})."
                 try:
                     os.remove(mp3)
                     os.remove(ogg)
@@ -948,7 +1011,7 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
                     except Exception:
                         pass
                 return f"__VOICE_SENT__:{text}"
-            return "متأسفانه امکان ارسال ویس در این لحظه میسر نشد."
+            return "❌ خطا در تولید ویس: فایل صوتی تولید نشد یا فرآیند تبدیل به فرمت صدا ناموفق بود."
 
         elif name == "create_or_update_skill":
             if not getattr(event, "out", False):

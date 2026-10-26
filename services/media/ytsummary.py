@@ -80,6 +80,72 @@ def _format_duration(seconds: Optional[int]) -> str:
     return f"{m}:{s:02d}"
 
 
+def get_youtube_video_info(video_url_or_id: str) -> str:
+    """
+    دریافت متادیتا و مشخصات ویدیوی یوتیوب (عنوان، کانال، مدت زمان، تاریخ، آمار) بدون دانلود ویدیو.
+    """
+    vid = extract_youtube_id(video_url_or_id)
+    if not vid:
+        clean = (video_url_or_id or "").strip()
+        if len(clean) == 11 and re.match(r"^[a-zA-Z0-9_-]{11}$", clean):
+            vid = clean
+        else:
+            return "❌ لینک یا شناسه ویدیوی یوتیوب معتبر یافت نشد."
+
+    oembed = get_oembed_data(vid)
+    title = oembed.get("title", "")
+    author = oembed.get("author_name", "")
+
+    ytdlp = get_ytdlp_data(vid)
+    if not title and ytdlp.get("title"):
+        title = ytdlp.get("title")
+    if not author and ytdlp.get("uploader"):
+        author = ytdlp.get("uploader")
+
+    duration_sec = ytdlp.get("duration")
+    duration_str = _format_duration(duration_sec)
+    view_count = ytdlp.get("view_count")
+    upload_date = ytdlp.get("upload_date")
+    like_count = ytdlp.get("like_count")
+    tags = ytdlp.get("tags") or []
+    description = (ytdlp.get("description") or "").strip()
+
+    if not title and not author and not view_count:
+        return f"❌ متأسفانه اطلاعاتی برای ویدیوی یوتیوب `{vid}` یافت نشد (احتمالاً ویدیو خصوصی یا حذف شده است)."
+
+    parts = [
+        f"🎬 **عنوان ویدیو:** {title or 'مشخص نشده'}",
+        f"👤 **کانال سازنده:** {author or 'مشخص نشده'}",
+    ]
+    if duration_str:
+        parts.append(f"⏱ **مدت زمان:** {duration_str}")
+    if upload_date:
+        if len(str(upload_date)) == 8:
+            d_s = str(upload_date)
+            formatted_date = f"{d_s[:4]}-{d_s[4:6]}-{d_s[6:]}"
+        else:
+            formatted_date = str(upload_date)
+        parts.append(f"📅 **تاریخ انتشار:** {formatted_date}")
+    if view_count:
+        try:
+            parts.append(f"👁 **تعداد بازدید:** {int(view_count):,}")
+        except Exception:
+            parts.append(f"👁 **تعداد بازدید:** {view_count}")
+    if like_count:
+        try:
+            parts.append(f"👍 **تعداد لایک:** {int(like_count):,}")
+        except Exception:
+            parts.append(f"👍 **تعداد لایک:** {like_count}")
+    if tags:
+        parts.append(f"🏷 **برچسب‌ها:** {', '.join(tags[:6])}")
+    if description:
+        desc_preview = description[:200] + ("..." if len(description) > 200 else "")
+        parts.append(f"\n📝 **پیش‌نمایش توضیحات:**\n«{desc_preview}»")
+    parts.append(f"\n🔗 **لینک ویدیو:** https://youtu.be/{vid}")
+
+    return "\n".join(parts)
+
+
 def summarize_youtube_video(video_url_or_id: str) -> str:
     """
     خلاصه‌سازی هوشمند ویدیوی یوتیوب بدون مصرف پهنای باند و بدون دانلود فایل ویدیو.
@@ -135,7 +201,7 @@ def summarize_youtube_video(video_url_or_id: str) -> str:
     except Exception as e:
         log.warning(f"Web search for youtube summary failed: {e}")
 
-    # Context aggregation
+    # ۴. تجمیع زمینه برای هوش مصنوعی
     context_parts = []
     context_parts.append(f"شناسه ویدیو: {vid}")
     if title:
@@ -159,7 +225,7 @@ def summarize_youtube_video(video_url_or_id: str) -> str:
     if not title and not description and not search_context:
         return f"❌ متأسفانه اطلاعاتی برای ویدیوی یوتیوب `{vid}` یافت نشد (احتمالاً ویدیو خصوصی یا حذف شده است)."
 
-    # Summary generation prompt
+    # ۵. دستور خلاصه سازی برای هوش مصنوعی
     prompt = (
         "تو کاپری (Capri) هستی. یک ویدیوی یوتیوب با اطلاعات زیر در اختیارت قرار گرفته است:\n\n"
         f"{full_context}\n\n"
@@ -178,7 +244,10 @@ def summarize_youtube_video(video_url_or_id: str) -> str:
         + ("📑 **سرفصل‌های ویدیو (Chapters):**\n(سرفصل‌های مهم به همراه زمان)\n\n" if chapters_text else "")
         + "💡 **جمع‌بندی نهایی و ارزش تماشا:**\n"
         "(آیا تماشای این ویدیو ارزشش رو داره و برای چه کسانی مفیده؟)\n\n"
-        "نکته مهم: لحنت صمیمی، محاوره‌ای و محترم باشه. هیچ متنی درباره دانلود ویدیو یا حجم ننویس."
+        "نکته مهم: لحنت صمیمی، محاوره‌ای و محترم باشه. هیچ متنی درباره دانلود ویدیو یا حجم ننویس.\n"
+        "⚠️ ضوابط حیاتی عدم توهم بصری: تو فقط به متادیتا، توضیحات متنی و نتایج وب دسترسی داری و فایل تصویری ویدیو را مشاهده نکرده‌ای. "
+        "اکیداً از ادعای کذب یا توصیف خیالی درباره صحنه‌های بصری، نورپردازی، تدوین، گریم، بازیگری یا حرکات دوربین خودداری کن "
+        "و صرفاً حقایق محتوایی و موضوعی ارائه‌شده را تحلیل کن."
     )
 
     try:

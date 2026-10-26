@@ -111,11 +111,11 @@ async def download_social(client, url: str, event=None, status=None) -> str:
                 except Exception as e:
                     for ch in joined:
                         await fetch._leave(client, ch)
-                    return f"❌ فایل دریافت شد اما ارسالش ممکن نشد: {e}"
+                    return f"❌ خطا در ارسال تلگرام: فایل با موفقیت دریافت شد اما فوروارد آن به چت با خطا مواجه شد ({e})."
                 for ch in joined:
                     await fetch._leave(client, ch)
                 return "✅ دانلود شد و فایل در چت ارسال شد. 👆"
 
     for ch in joined:
         await fetch._leave(client, ch)
-    return "❌ ربات دانلود در زمان مقرر پاسخی نداد. دوباره تلاش کن یا لینک را مستقیم در همان ربات امتحان کن."
+    return "❌ خطا در دانلود: ربات دانلود در زمان مقرر پاسخی نداد. دوباره تلاش کن یا لینک را مستقیم در همان ربات امتحان کن."

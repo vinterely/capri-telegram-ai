@@ -17,7 +17,7 @@ from core import fsutil
 
 FILE = os.path.join(config.BASE_DIR, "roleplay.json")
 
-# Max dialogue turns for context continuity
+# سقف نوبت‌های گفتگوی اخیر که برای حفظ پیوستگی به پرامپت اضافه می‌شود
 MAX_HISTORY = 24
 
 RP_SYSTEM = (

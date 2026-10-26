@@ -20,7 +20,7 @@ REGISTRY_FILE = os.path.join(SKILLS_DIR, "registry.json")
 os.makedirs(SKILLS_DIR, exist_ok=True)
 
 
-# Runtime skill generation flag: ALLOW_SKILL_CREATION in .env
+# ساخت اسکیل جدید توسط هوش مصنوعی به‌صورت پیش‌فرض خاموش است. روشن کردن: ALLOW_SKILL_CREATION=1 در .env
 ALLOW_SKILL_CREATION = os.getenv("ALLOW_SKILL_CREATION", "0").strip() == "1"
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,32}$")
 
@@ -213,7 +213,7 @@ def create_or_update_skill(name: str, description: str, parameters: dict, python
         return f"❌ {err}"
     name = name.strip().lower()
 
-    # Code syntax and AST validation
+    # اعتبارسنجی سینتکس کد (در کنار بازرسی امنیتی AST)
     try:
         compile(python_code, f"{name}.py", "exec")
     except SyntaxError as se:

@@ -13,6 +13,7 @@ downloads/*
 settings.json
 cognitive_memory.json
 memory.json
+instance.id
 important.json
 paid_bots.json
 cache.json

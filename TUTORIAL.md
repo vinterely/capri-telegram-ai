@@ -1,6 +1,6 @@
-# 📘 Capri AI Userbot [v1.6.0] - Comprehensive Setup Tutorial
+# 📘 Capri AI Userbot [v2.7.0] - Comprehensive Setup Tutorial
 
-Welcome to the definitive setup tutorial for **Capri**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
+Welcome to the definitive setup tutorial for **Capri (v2.7.0)**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
 
 This tutorial guides you from a blank machine to a fully running, production-ready Capri userbot in under 5 minutes.
 
@@ -14,7 +14,7 @@ This tutorial guides you from a blank machine to a fully running, production-rea
 5. [🧙 Method 2: The Interactive Python Wizard (start.py)](#5--method-2-the-interactive-python-wizard-startpy)
 6. [🐳 Method 3: Docker Deployment (Recommended for Servers/VPS)](#6--method-3-docker-deployment-recommended-for-serversvps)
 7. [🛠️ Method 4: Manual Terminal Setup](#7-️-method-4-manual-terminal-setup)
-8. [Step 4: Testing Key Commands & Features (v1.6.0)](#8-step-4-testing-key-commands--features-v160)
+8. [Step 4: Testing Key Commands & Features (v2.7.0)](#8-step-4-testing-key-commands--features-v270)
 9. [Step 5: Production 24/7 Daemon Execution](#9-step-5-production-247-daemon-execution)
 10. [Troubleshooting & FAQ](#10-troubleshooting--faq)
 
@@ -28,7 +28,7 @@ Before installing Capri, verify that your machine meets the following requiremen
 - **Python:** Python **3.10**, **3.11**, or **3.12** ([Download Python](https://www.python.org/downloads/)).
   - *Note for Windows users:* Check the box **"Add python.exe to PATH"** during installation.
 - **Git:** Installed on your system ([Download Git](https://git-scm.com/)).
-- **FFmpeg (Crucial for Voice Notes):**
+- **FFmpeg (Crucial for Voice Notes & Audio):**
   - **Linux (Debian/Ubuntu):**
     ```bash
     sudo apt update && sudo apt install -y ffmpeg
@@ -66,25 +66,32 @@ Capri connects directly to the Telegram MTProto network as a user client via Tel
 
 ## 3. Step 2: Obtain AI & Search API Keys
 
-Capri supports multiple AI providers with automatic fallback and circuit-breaker resilience. You need **at least one** LLM provider (Google Gemini is free and recommended for start):
+Capri supports multiple AI providers with automatic circuit-breaker failover. You need **at least one** LLM provider (Google Gemini is free and recommended to start):
 
 ### 1. Google Gemini (Primary / Vision / Fallback) — **Recommended & Free**
 - Go to [Google AI Studio](https://aistudio.google.com/apikey).
 - Create a free project and generate your API key (`GEMINI_API_KEY`).
+- *(Optional)* Add a second key (`GEMINI_API_KEY_2`) to double your rate limits.
 
-### 2. Inception Labs / Mercury 3 (Ultra-Fast ReAct Agent Engine) — **Recommended**
+### 2. Inception Labs / Mercury 3 (Diffusion-LLM with Native Tool-Calling) — **Recommended**
 - Register at [Inception Labs](https://api.inceptionlabs.ai).
-- Get your `INCEPTION_API_KEY` for instant Diffusion-LLM reasoning and function calling.
+- Get your `INCEPTION_API_KEY` for ultra-fast ReAct reasoning (`mercury-3`, UID: `i1`).
 
-### 3. Groq (Ultra-Fast Inference & Whisper Audio Transcription) — **Recommended**
+### 3. Groq (Ultra-Fast Inference & Whisper Transcription) — **Recommended**
 - Register at [Groq Console](https://console.groq.com/keys).
-- Create your `GROQ_API_KEY` (used for `whisper-large-v3-turbo` voice-to-text and `qwen-3.8-27b`).
+- Create your `GROQ_API_KEY` (used for `whisper-large-v3-turbo` audio transcription and `qwen/qwen3.8-27b`).
 
-### 4. Hooshia (Native Persian & Regional LLM) — **Optional**
+### 4. XKIRO, B.AI & AnyAPI (200+ Flagship & Specialized Models) — **Optional**
+- **XKIRO:** [xkiro.com](https://xkiro.com) ➔ `XKIRO_KEY` (97 models, UIDs `k1`..`k97`).
+- **B.AI:** [b.ai](https://b.ai) ➔ `BAI_KEY` (62 models, UIDs `b1`..`b62`).
+- **AnyAPI:** [anyapi.ai](https://anyapi.ai) ➔ `ANYAPI_KEY` (7 models, UIDs `a1`..`a7`).
+- **OpenRouter:** [openrouter.ai](https://openrouter.ai) ➔ `OPENROUTER_API_KEY` (15 models, UIDs `o1`..`o15`).
+
+### 5. Hooshia (Persian-Native Models) — **Optional**
 - Register at [Hooshia.com](https://hooshia.com).
-- Obtain `HOOSHIA_API_KEY` for high-fidelity colloquial Persian comprehension without VPN.
+- Obtain `HOOSHIA_API_KEY` for high-fidelity colloquial Persian GLM models without VPN (`h1`..`h3`).
 
-### 5. Google Serper (Real-Time Web & YouTube Search) — **Recommended**
+### 6. Google Serper (Real-Time Web & YouTube Search) — **Recommended**
 - Register at [Serper.dev](https://serper.dev).
 - Get your free `SERPER_API_KEY` (provides 2,500 free Google searches for real-time web retrieval).
 
@@ -92,7 +99,7 @@ Capri supports multiple AI providers with automatic fallback and circuit-breaker
 
 ## 4. 🚀 Method 1: The One-Click Launcher (run.bat / run.sh)
 
-Capri provides an updated interactive launcher that handles virtual environment creation, dependency installation, configuration checking, testing, and execution automatically.
+Capri provides an automated launcher that handles virtual environment creation, dependency installation, configuration checking, testing, and execution automatically.
 
 ### On Windows:
 1. Clone the repository:
@@ -100,14 +107,8 @@ Capri provides an updated interactive launcher that handles virtual environment 
    git clone https://github.com/vinterely/capri-telegram-ai.git
    cd capri-telegram-ai
    ```
-2. **Double-click on `run.bat`** (or execute `.\run.bat` in Command Prompt / PowerShell).
-3. The interactive menu presents:
-   - `[1] Start Capri Userbot (Normal Mode)`
-   - `[2] Interactive Setup Wizard (start.py)`
-   - `[3] Authenticate Telegram Session (login.py)`
-   - `[4] Run Automated Test Suite (93 unit tests)`
-   - `[5] Edit Environment Configuration (.env)`
-4. Select `[1]` to start. If it's your first run, it will automatically guide you through `.env` setup and `login.py` authentication.
+2. Double-click `run.bat` (or run `run.bat` in Command Prompt / PowerShell).
+3. The wizard will create `.env` if missing, guide you through interactive setup, and launch the bot.
 
 ### On Linux / macOS:
 1. Clone the repository:
@@ -125,52 +126,37 @@ Capri provides an updated interactive launcher that handles virtual environment 
 
 ## 5. 🧙 Method 2: The Interactive Python Wizard (start.py)
 
-For a menu-driven terminal experience that works identically across Windows, macOS, and Linux:
-
+If you prefer an interactive console setup:
 ```bash
 python start.py
 ```
-
-`start.py` is a self-contained CLI wizard built using only Python's standard library. It provides:
-- **System Health Check:** Instantly scans for `.env`, `session.session`, `ffmpeg`, and virtual environment.
-- **Interactive .env Configuration:** Prompts for your Telegram and Gemini keys step-by-step and writes `.env` automatically.
-- **Telegram Authentication:** Launches `login.py` directly from the menu.
-- **One-Key Bot Launch:** Starts Capri with graceful stop handling (`Ctrl+C`).
-- **Test Suite Verification:** Runs the 93-test unit test suite with a single keypress.
+`start.py` performs environment checks, prompts for missing keys, runs connection diagnostics, and boots Capri.
 
 ---
 
 ## 6. 🐳 Method 3: Docker Deployment (Recommended for Servers/VPS)
 
-For 24/7 server deployments without polluting your host environment:
-
-1. Clone and enter the directory:
+1. Clone the repository and configure `.env`:
    ```bash
    git clone https://github.com/vinterely/capri-telegram-ai.git
    cd capri-telegram-ai
+   cp .env.example .env
+   # Edit .env with your credentials
    ```
 
-2. Perform the initial one-time interactive login to generate `session.session`:
+2. Perform one-time Telegram authentication on your host machine to generate `session.session`:
    ```bash
-   python3 -m venv venv && source venv/bin/activate
-   pip install telethon python-dotenv
    python login.py
    ```
 
-3. Configure your `.env` file from the template:
+3. Launch via Docker Compose:
    ```bash
-   cp .env.example .env
-   nano .env
+   docker-compose up -d --build
    ```
 
-4. Launch Capri in background via Docker Compose:
+4. View logs:
    ```bash
-   docker compose up -d --build
-   ```
-
-5. Monitor logs anytime:
-   ```bash
-   docker compose logs -f
+   docker-compose logs -f
    ```
 
 ---
@@ -224,54 +210,51 @@ python bot.py
 
 ---
 
-## 8. Step 4: Testing Key Commands & Features (v1.6.0)
+## 8. Step 4: Testing Key Commands & Features (v2.7.0)
 
-Open Telegram on your phone or desktop and test Capri in **Saved Messages** or any chat:
+Open Telegram and test Capri in **Saved Messages** or any chat:
 
-### 1. 📁 Smart Saved Messages Organizer (Capri Vault)
-- `کاپری مرتب کن سیو مسیج ۱۰ پیام` *(Provisions private Forum supergroup and classifies last 10 messages into 8 topics)*
-- `کاپری ۵۰۰ پیام سیومسیج رو مرتب کن` *(Batch-sorts 500 messages with live progress bar and flood control)*
+### 1. 🤖 Model Switching & Catalog Navigation (v2.7.0)
+- `کاپری مدلها` / `/models` *(Opens interactive Telegram inline pagination menu to browse 253 AI models)*
+- `کاپری برو رو مرکوری` *(Switches to Inception Labs Mercury 3 fast diffusion agent)*
+- `k1` or `کاپری مدل k1` *(Instantly switches to flagship model from XKIRO)*
+- `b1` or `کاپری مدل b1` *(Switches to MiniMax M3.1 Flash from B.AI)*
+- `a1` or `کاپری مدل a1` *(Switches to Gemini 2.5 Flash Lite from AnyAPI)*
+- `o3` or `کاپری مدل o3` *(Switches to Nemotron 3.5 Lightning from OpenRouter)*
+- `کاپری مدل فعلی چیه؟` *(Displays active model, service provider, and UID)*
+
+### 2. 💬 Deep Reply Context & Smart Summarization (v2.7.0)
+- **Summarize Replied Message:** Reply to any long message or article and say `کاپری خلاصه کن` *(Capri directly summarizes the original message text with author attribution)*
+- **Reply to Media Links:** Reply to a message with a YouTube or Instagram link and say `کاپری خلاصه کن` or `کاپری دانلود کن` *(Seamlessly pulls the link from the replied message)*
+- **Group Identity Separation:** In groups, Capri accurately differentiates between the current sender's Telegram ID/name and the replied message author's Telegram ID/name.
+- **Honest Deleted Handling:** If you reply to a deleted message, Capri informs you that the message is inaccessible rather than hallucinating content.
+
+### 3. 🎬 Anti-Visual-Hallucination Video Summaries (v2.7.0)
+- `کاپری این ویدیو درباره چیه: [لینک یوتیوب]` *(Summarizes YouTube video content, chapters, and takeaways without downloading or fabricating visual descriptions)*
+- `کاپری مشخصات این ویدیو چیه: [لینک یوتیوب]` *(Fetches video duration, channel author, and view counts without full summary)*
+- `کاپری دانلود کن این ویدیو رو با کیفیت 720: [لینک یوتیوب]` *(Downloads and forwards original video file)*
+
+### 4. 📁 Smart Saved Messages Organizer (Capri Vault)
+- `کاپری مرتب کن سیو مسیج ۱۰ پیام` *(Provisions private Forum supergroup and classifies messages into 7 topics)*
+- `کاپری ۵۰۰ پیام سیومسیج رو مرتب کن` *(Batch-sorts 500 messages with live progress and flood control)*
 - `کاپری وضعیت صندوق` *(Displays current vault group status, total sorted count, and invite link)*
-- `کاپری صندوق پاکسازی کن` *(Purges all content messages from vault and resets processing cache)*
-- `کاپری 50 پیام اخیر صندوق پاکسازی کن` *(Deletes the last 50 content messages from vault supergroup)*
-- `کاپری دوباره مرتب کن صندوقو` *(Re-evaluates and re-sorts Saved Messages ignoring previous cache)*
-- `کاپری ۱۰۰ پیام اخیر اینجا رو مرتب کن` *(In Saved Messages chat: spatial grounding detects "here" as Saved Messages)*
 
-### 2. ⚡ Invisible Smart Reactions Assistant
-- **On Channel Posts:** React with **❤️** or **👍** on any post $\rightarrow$ Capri analyzes topic and forwards to designated topic in Capri Vault + sends receipt to Saved Messages.
-- **On Voice Notes:** React with **✍️**, **🎙️**, or **📝** on any voice message $\rightarrow$ Whisper transcribes audio + AI produces structured tone & intent analysis in Saved Messages.
-- **In DMs & Groups:** React with **🕊️** or **🤖** on any message $\rightarrow$ AI analyzes topic and forwards to Capri Vault.
-- **Direct Roast:** React with **🤡** on any message from another user $\rightarrow$ Capri generates a witty, sharp roast and replies directly to their message in the chat.
-- **Smart Reminders:** React with **👀** or **👨‍💻** on any message $\rightarrow$ Schedules a 1-hour task reminder in DND with notification in Saved Messages.
+### 5. ⚡ Invisible Smart Reactions Assistant
+- **On Channel Posts:** React with **❤️** or **👍** $\rightarrow$ Archives post directly into the appropriate topic in Capri Vault.
+- **On Voice Notes:** React with **✍️** or **🎙️** $\rightarrow$ Transcribes audio with Whisper and sends analysis to Saved Messages.
+- **Direct Roast:** React with **🤡** on any message from another user $\rightarrow$ Generates a witty roast reply directed at the sender.
+- **Smart Reminders:** React with **👀** on any message $\rightarrow$ Schedules a 1-hour task reminder in Saved Messages.
 
-### 3. 🔕 Smart DND, Sleep Mode & Reminders
-- `کاپری تا ساعت ۲ خوابم` / `تا ساعت ۱۴ سر کلاسم` *(Activates DND with empathetic auto-replies in DMs and group mentions)*
-- `کاپری بیدار شدم` / `کاپری آزاد شدم` *(Deactivates DND and returns to normal operation with activity report)*
-- `کاپری ساعت ۱۰ یادم بنداز جزوه رو بفرستم` *(Schedules a timed reminder in Saved Messages)*
-- `کاپری لیست یادآورها` / `کاپری پاک کردن یادآورها` *(View or clear scheduled reminders)*
-
-### 4. 🎓 Study Partner & Code Review
-- Send a document (PDF, Word, PPTX) + `کاپری این فایل رو بررسی کن` *(Generates 4-part exam roadmap & predictions)*
-- Send a source code file + `کاپری این کد رو بررسی کن` *(Full code review: architecture, security risks, optimization)*
-
-### 5. 🎭 Digital Twin (Ghost Mode)
-- `کاپری مثل من شو` *(Learns your writing style from unedited messages and answers whitelisted DMs as you)*
-- `کاپری برگرد به حالت عادی` *(Deactivates Ghost Mode)*
-
-### 6. 🧠 Relationship & Chat Analytics
-- `کاپری تحلیل کن این چت` *(6-dimensional behavioral audit of up to 500 unedited chat messages with health score)*
-
-### 7. 🎙️ Voice Synthesizer (48kHz Studio TTS)
+### 6. 🎙️ Voice Synthesizer (48kHz Studio TTS)
 - `کاپری صدا دلارا` *(Switches voice to warm female Dilara)*
 - `کاپری صدا فرید` *(Switches voice to professional male Farid)*
 - `کاپری صدا جمینای` *(Switches voice to Google Gemini TTS)*
-- `کاپری چه صدایی` *(Shows active TTS engine and voice)*
+- `کاپری چه صدایی` *(Shows active TTS engine and speaker)*
 
-### 8. 🎵 Direct Music Search & Deezer Pilot
-- `کاپری آهنگ [نام آهنگ یا خواننده] بفرست` *(Queries Deezer Music Bot, clicks matching option, re-uploads cleanly)*
-
-### 9. 🌐 Multi-Lingual Deep Research (gsearch)
-- `کاپری مقایسه عملکرد Go و Rust در وب‌سرورها چیه` *(Simultaneous search across English, Chinese NGA forums, and Persian)*
+### 7. 🔕 Smart DND, Sleep Mode & Reminders
+- `کاپری تا ساعت ۲ خوابم` / `تا ساعت ۱۴ سر کلاسم` *(Activates DND with empathetic auto-replies in DMs and group mentions)*
+- `کاپری بیدار شدم` / `کاپری آزاد شدم` *(Deactivates DND and returns to normal operation with activity report)*
+- `کاپری ساعت ۱۰ یادم بنداز جزوه رو بفرستم` *(Schedules a timed reminder in Saved Messages)*
 
 ---
 
@@ -337,17 +320,12 @@ Start-Process -NoNewWindow -FilePath ".\venv\Scripts\python.exe" -ArgumentList "
 - **Cause:** `ffmpeg` is missing or not located in system `PATH`.
 - **Solution:** Install FFmpeg and verify with `ffmpeg -version`. If installed in a custom directory, set `FFMPEG_PATH=C:\path\to\ffmpeg.exe` in your `.env`.
 
-### Q3: `ValueError: Your API ID or Hash cannot be empty or None`
-- **Cause:** You ran `bot.py` before filling in your `.env` file.
-- **Solution:** Verify that `.env` is present in the project root and `API_ID` / `API_HASH` are set.
+### Q3: Why did saying "باید خلاصه کنی" switch the model in older versions?
+- **Resolved in v2.7.0:** Earlier versions used substring matching on "بای" (which matched inside Persian words like "باید"). In v2.7.0, discrete Unicode word-boundary matching and explicit `model_intent` requirements ensure natural words never trigger accidental model switching.
 
 ### Q4: Connection timeouts or SOCKS proxy errors
 - **Cause:** Telegram is filtered in your region and proxy details are not set.
-- **Solution:** Verify your VPN / V2Ray is running and set `PROXY_TYPE=socks5`, `PROXY_HOST=127.0.0.1`, and `PROXY_PORT=10808` in `.env`.
+- **Solution:** Verify your VPN / proxy client is running and set `PROXY_TYPE=socks5`, `PROXY_HOST=127.0.0.1`, and `PROXY_PORT=10808` in `.env`.
 
 ### Q5: Is running a userbot safe?
-- **Guidelines:** Capri is designed with safety gates (deny-by-default for strangers, taint quarantine against prompt injection, destructive action confirmations). Always respect Telegram's Terms of Service and do not use userbots for unsolicited broadcasting or spam.
-
----
-
-🎉 **Congratulations!** Your Capri Telegram AI Userbot is now up, verified, and running smoothly.
+- **Guidelines:** Capri is designed with comprehensive safety gates (deny-by-default for strangers, taint quarantine against prompt injection, destructive action confirmations, and isolated memory namespaces). Always respect Telegram's Terms of Service and do not use userbots for unsolicited broadcasting or spam.

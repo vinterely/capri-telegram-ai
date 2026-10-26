@@ -260,7 +260,7 @@ async def _handle_voice_reaction(client, msg, emoji: str, sender_name: str, chat
             logger.warning("Whisper returned empty transcript.")
             return False
 
-        # Voice analysis transcription
+        # تحلیل هوشمند ویس با مدل AI
         analysis = ""
         try:
             analysis_prompt = (
@@ -655,7 +655,7 @@ async def handle_reaction_update(client, update) -> bool:
             else:
                 unmark_handled(peer_id, msg_id, emoji)
 
-        # Voice reaction handler
+        # ۳. ری‌اکشن دست‌نوشته، میکروفون، برگه (✍️، 🎙️، 📝) در پیوی و گروه -> پیاده‌سازی ویس + تحلیل هوش مصنوعی
         if emoji in VOICE_ANALYZE_EMOJIS or norm_emoji in VOICE_ANALYZE_EMOJIS:
             if is_voice:
                 ok = await _handle_voice_reaction(client, msg, emoji, sender_name, chat_title)

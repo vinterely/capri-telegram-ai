@@ -3,6 +3,9 @@ import json
 import re
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass, field
+import random
+from typing import Any, Dict, List, Optional
 
 from ai_engine import ai
 from core import cognitive_memory
@@ -53,19 +56,20 @@ class CircuitBreaker:
         self._cooldowns.clear()
         self._half_open.clear()
 
-    def record_failure(self, key: str):
+    def record_failure(self, key: str, cooldown: Optional[int] = None):
         now = time.time()
+        eff_cooldown = cooldown if cooldown is not None else self.cooldown_seconds
         # In half-open state, a single failure immediately trips the circuit breaker open
         if key in self._half_open:
             self._half_open.discard(key)
-            self._cooldowns[key] = now + self.cooldown_seconds
+            self._cooldowns[key] = now + eff_cooldown
             log.warning("Circuit breaker re-opened for %s after half-open trial failure", key)
             return
         recent = [t for t in self._failures.get(key, []) if now - t <= self.window_seconds]
         recent.append(now)
         self._failures[key] = recent
-        if len(recent) >= self.failure_threshold:
-            self._cooldowns[key] = now + self.cooldown_seconds
+        if len(recent) >= self.failure_threshold or cooldown is not None:
+            self._cooldowns[key] = now + eff_cooldown
             log.warning("Circuit breaker opened for %s (cooldown until %d, failures: %d)", key, int(self._cooldowns[key]), len(recent))
 
 
@@ -76,6 +80,18 @@ _last_healthy = {}
 
 # HTTP timeout for tool-calling steps (seconds). Kept brief for fast provider failover.
 TOOL_STEP_TIMEOUT = 15
+
+def _handle_step_exception(key: str, exc: Exception):
+    err_str = str(exc).lower()
+    if '429' in err_str or 'rate limit' in err_str:
+        log.warning('Rate limit (429) on %s. Setting 30s cooldown.', key)
+        breaker.record_failure(key, cooldown=30)
+    elif 'balance' in err_str or 'credit' in err_str or 'insufficient' in err_str or '400' in err_str or '403' in err_str:
+        log.warning('Balance/quota issue on %s (%s). Setting 120s cooldown.', key, type(exc).__name__)
+        breaker.record_failure(key, cooldown=120)
+    else:
+        breaker.record_failure(key)
+        log.info('Model step on %s unavailable (%s), trying fallbacks', key, type(exc).__name__)
 
 AGENT_SYSTEM = prompts.AGENT_SYSTEM
 
@@ -100,14 +116,25 @@ def _contains_external_url(text: str) -> bool:
     return bool(re.search(r"(https?://\S+|www\.\S+|t\.me/\S+|youtube\.com|youtu\.be|pastebin\.com)", text, re.IGNORECASE))
 
 
-def _build_agent_messages(question: str, context: str, memory_str: str, is_owner: bool = True, sender_name: str = "", env_context: str = "") -> list:
+def _build_agent_messages(question: str, context: str, memory_str: str, is_owner: bool = True, sender_name: str = "", env_context: str = "", chat_id: Optional[str] = None, scope_id: Optional[str] = None) -> list:
+    from core import memory
     question = _sanitize_prompt_text(question, 4000)
     context = _sanitize_prompt_text(context, 3000)
     memory_str = _sanitize_prompt_text(memory_str, 4000)
     sender_name = _sanitize_prompt_text(sender_name, 50) or "مخاطب"
 
+    resolved_scope = memory.normalize_scope_id(scope_id or chat_id) if (scope_id or chat_id) else None
+    is_group = bool(resolved_scope and (":group:" in resolved_scope or ":channel:" in resolved_scope))
+
     cog_summary = cognitive_memory.get_context_summary()
     sys_content = AGENT_SYSTEM + f"\n\nامروز: {ai._today()}"
+    try:
+        from core import social_dynamics
+        soc_mod = social_dynamics.get_behavioral_prompt_modifier(question, context, chat_id=resolved_scope)
+        if soc_mod:
+            sys_content += f"\n\n{soc_mod}"
+    except Exception:
+        pass
 
     if is_owner:
         sys_content += "\n\n👤 مخاطب فعلی: صاحب اکانت. تمام دستورات تلگرامی او (لفت از کانال، مشاهده یا مرتب‌سازی پوشه‌ها، دانلود ویدیو، روست، پاکسازی، و...) را فوراً با ابزارهای مربوطه اجرا کن و هرگز به او نگو دسترسی نداری."
@@ -132,10 +159,16 @@ def _build_agent_messages(question: str, context: str, memory_str: str, is_owner
     is_external_untrusted = _contains_external_url(question) or _contains_external_url(context)
 
     if is_owner and not is_external_untrusted:
-        if cog_summary:
+        if cog_summary and not is_group:
             sys_content += f"\n\n🧠 مدل شناختی و شناخت عمیق تو از کاربر:\n{cog_summary}"
+        if not memory_str and resolved_scope:
+            try:
+                from core import memory
+                memory_str = memory.relevant_facts(question, scope_id=resolved_scope, limit=6)
+            except Exception:
+                pass
         if memory_str:
-            sys_content += f"\n\nحافظه‌ی ماندگار تو درباره کاربر:\n{memory_str}"
+            sys_content += f"\n\nحافظه‌ی ماندگار تو در این گفتگو:\n{memory_str}"
     elif is_owner and is_external_untrusted:
         sys_content += (
             "\n\n🛡️ حالت امن ایزوله‌سازی منابع خارجی (Untrusted Ingestion Isolation):\n"
@@ -374,8 +407,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "bai" and sel_model and config.BAI_KEY:
         key = f"bai:{sel_model}"
@@ -387,8 +419,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "anyapi" and sel_model and config.ANYAPI_KEY:
         key = f"anyapi:{sel_model}"
@@ -400,8 +431,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "openrouter" and sel_model and config.OPENROUTER_API_KEY:
         key = f"openrouter:{sel_model}"
@@ -413,8 +443,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "hooshia" and sel_model and config.HOOSHIA_API_KEY:
         key = f"hooshia:{sel_model}"
@@ -426,8 +455,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "groq" and sel_model and config.GROQ_API_KEY:
         key = f"groq:{sel_model}"
@@ -439,8 +467,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     if sel_service == "inception" and sel_model and config.INCEPTION_API_KEY:
         key = f"inception:{sel_model}"
@@ -452,8 +479,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Model step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     # 2. Secondary priority: Inception / Hooshia / Groq reliable endpoints
     if config.HOOSHIA_API_KEY:
@@ -466,8 +492,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Hooshia primary step failed: %s, falling back", type(e).__name__)
+                _handle_step_exception(key, e)
 
     # 3. Native Gemini with Function Calling
     if config.GEMINI_API_KEY:
@@ -481,20 +506,21 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                         _last_healthy[key] = time.time()
                         return res
                 except Exception as e:
-                    breaker.record_failure(key)
-                    log.info("Gemini step on %s unavailable (%s), trying fallbacks", key, type(e).__name__)
+                    _handle_step_exception(key, e)
 
     # 4. Automatic fallback chain across tool-enabled models
     # Sort candidates by recent health: most recently successful provider is tried first.
     fallback_models = [
-        ("xkiro", "openai/gpt-6.1-sol"),
-        ("anyapi", "google/gemini-3.6-flash"),
-        ("bai", "GPT-6.1 Sol"),
+        ("xkiro", "mistralai/ministral-14b"),
+        ("anyapi", "google/gemini-2.5-flash-lite"),
+        ("bai", "minimax-m3.1-flash"),
+        ("bai", "gpt-6.1-sol"),
         ("inception", "mercury-3"),
         ("groq", "openai/gpt-oss-120b"),
         ("groq", "openai/gpt-oss-20b"),
         ("groq", "qwen/qwen3.8-27b"),
         ("openrouter", "nvidia/nemotron-3.5-lightning:free"),
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
     ]
     fallback_models.sort(key=lambda sm: _last_healthy.get(f"{sm[0]}:{sm[1]}", 0.0), reverse=True)
 
@@ -510,8 +536,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
         elif srv == "anyapi" and config.ANYAPI_KEY:
             try:
                 res = provider_anyapi.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
@@ -520,8 +545,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
         elif srv == "bai" and config.BAI_KEY:
             try:
                 res = provider_bai.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
@@ -530,8 +554,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
         elif srv == "openrouter" and config.OPENROUTER_API_KEY:
             try:
                 res = provider_openrouter.call_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 1500)
@@ -540,8 +563,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
         elif srv == "groq" and config.GROQ_API_KEY:
             try:
                 res = _call_groq_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 1500)
@@ -550,8 +572,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
         elif srv == "inception" and config.INCEPTION_API_KEY:
             try:
                 res = _call_inception_tools(messages, m, tools_def=tools_def, timeout=TOOL_STEP_TIMEOUT, temperature=temperature, max_tokens=max_tokens or 2048)
@@ -560,8 +581,7 @@ def _call_model_step(messages: list, tools_def=_SENTINEL_TOOLS, temperature: flo
                     _last_healthy[key] = time.time()
                     return res["choices"][0]["message"]
             except Exception as e:
-                breaker.record_failure(key)
-                log.info("Fallback model on %s unavailable (%s), trying next", key, type(e).__name__)
+                _handle_step_exception(key, e)
 
     return None
 
@@ -570,7 +590,13 @@ def _final_answer_without_tools(messages: list) -> str:
     final_msgs = list(messages)
     final_msgs.append({
         "role": "user",
-        "content": "مرحله‌ی فراخوانی ابزارها تمام شده است. اکنون بر اساس تمام اطلاعات و خروجی‌های به دست آمده، پاسخ نهایی، جامع، خوانا و بدون ابزار را به زبان فارسی ارائه کن. هیچ ابزاری صدا نزن."
+        "content": (
+            "مرحله‌ی فراخوانی ابزارها تمام شده است. اکنون بر اساس تمام اطلاعات و نتایج واقعی ابزارها، پاسخ نهایی، جامع، خوانا و بدون ابزار را به زبان فارسی ارائه کن. هیچ ابزاری صدا نزن.\n"
+            "⚠️ قوانین الزامی صداقت و مدیریت خطا:\n"
+            "۱. اگر اجرای ابزاری با شکست یا خطا مواجه شد، هرگز ادعا نکن کار انجام شده یا فایل ارسال شده است. صریحاً خطای واقعی را توضیح بده.\n"
+            "۲. اگر پیامی مبنی بر قرنطینه امنیتی داده‌ها در خروجی نیست، هرگز ادعای بلاک یا قرنطینه نکن.\n"
+            "۳. بین موفقیت در تولید/دانلود فایل و شکست در ارسال تلگرام تمایز قائل شو."
+        )
     })
     msg = _call_model_step(final_msgs, tools_def=None, temperature=0.7, max_tokens=8192)
     if msg:
@@ -674,9 +700,14 @@ async def build_environment_context(event, client) -> str:
         # Resolve replied-to message context
         if getattr(event, "reply_to_msg_id", None):
             try:
-                replied = await event.get_reply_message()
-                if replied:
-                    r_text = (replied.raw_text or "").replace("\n", " ")[:150]
+                replied = None
+                if hasattr(event, "get_reply_message"):
+                    replied = await event.get_reply_message()
+                elif client and getattr(event, "chat_id", None):
+                    replied = await client.get_messages(event.chat_id, ids=event.reply_to_msg_id)
+
+                if replied and getattr(replied, "id", None):
+                    r_text = (replied.raw_text or replied.message or "").replace("\n", " ")[:600]
                     r_media = ""
                     if getattr(replied, "file", None):
                         r_media = f"فایل {getattr(replied.file, 'name', '') or getattr(replied.file, 'mime_type', '')}"
@@ -688,13 +719,17 @@ async def build_environment_context(event, client) -> str:
                         r_media = "ویس/صوت"
 
                     r_from = ""
+                    r_from_id = getattr(replied, "sender_id", None)
                     if getattr(replied, "sender", None):
-                        r_from = getattr(replied.sender, "first_name", "")
+                        r_from = getattr(replied.sender, "first_name", "") or getattr(replied.sender, "title", "")
+                    id_desc = f" (شناسه: {r_from_id})" if r_from_id is not None else ""
 
-                    summary = f"در پاسخ به پیام {r_from}: {r_media} «{r_text}»".strip()
+                    summary = f"در پاسخ به پیام {r_from or 'کاربر'}{id_desc} [پیام {replied.id}]: {r_media} «{r_text}»".strip()
                     parts.append(summary)
+                else:
+                    parts.append(f"در پاسخ به پیام با شناسه {event.reply_to_msg_id}: پیام اصلی حذف شده یا غیرقابل‌دسترسی است.")
             except Exception:
-                pass
+                parts.append(f"در پاسخ به پیام با شناسه {event.reply_to_msg_id}: خطا در دریافت پیام اصلی.")
     except Exception:
         pass
 
@@ -722,155 +757,267 @@ def sanitize_tainted_output(text: str) -> str:
     return t
 
 
-async def run_agent(question: str, context: str, memory_str: str, event, client, status_msg=None, max_steps: int = 5, is_owner: bool = True, sender_name: str = "") -> str:
-    """Autonomous ReAct agent decision loop (Reasoning + Acting + Observing)."""
-    env_context = await build_environment_context(event, client)
-    messages = _build_agent_messages(question, context, memory_str, is_owner=is_owner, sender_name=sender_name, env_context=env_context)
+@dataclass
+class AgentState:
+    request_id: str
+    chat_id: Optional[str]
+    is_owner: bool
+    sender_name: str
+    tainted: bool
+    step: int = 0
+    max_steps: int = 6
+    messages: list = field(default_factory=list)
+    executed_calls: dict = field(default_factory=dict)
+    tool_outputs: list = field(default_factory=list)
+    errors: list = field(default_factory=list)
+    completed: bool = False
+    final_response: Optional[str] = None
 
-    # بررسی اولیه ورود محتوای نامطمئن خارجی
-    tainted = False
-    if not is_owner or re.search(r"https?://\S+", question or ""):
-        tainted = True
-    if context and ("(کاربر" in context or "پیام ریپلای" in context or "مخاطب:" in context):
-        tainted = True
 
-    _last_run_tainted.set(tainted)
-    last_tool_output = None
-    executed_calls = {}
+class AgentExecutionCycle:
+    """
+    چرخه متمرکز اجرای عامل هوشمند (Centralized Agent Execution Cycle):
+    - مدیریت دقیق حلقه ReAct (استدلال، اقدام و مشاهده)
+    - پشتیبانی از اجرای چندمرحله‌ای ابزارها با اعتبارسنجی ورودی و بازخورد خطا
+    - کنترل سخت‌گیرانه سقف گام‌ها (Step Limiting) جهت پیشگیری از حلقه‌های نامتناهی
+    - ایزوله‌سازی کامل وضعیت در سطح هر نشست/درخواست (Per-Request State Isolation)
+    - بازیابی هوشمند از خطاهای 429، اتمام موجودی و قطعی ارائه‌دهندگان
+    """
+    def __init__(
+        self,
+        question: str,
+        context: str,
+        memory_str: str,
+        event: Any,
+        client: Any,
+        status_msg: Any = None,
+        max_steps: int = 5,
+        is_owner: bool = True,
+        sender_name: str = ""
+    ):
+        self.question = question
+        self.context = context
+        self.memory_str = memory_str
+        self.event = event
+        self.client = client
+        self.status_msg = status_msg
+        self.max_steps = max(2, min(12, max_steps))
+        self.is_owner = is_owner
+        self.sender_name = sender_name
 
-    for step in range(max_steps):
-        # On final iteration, request direct text answer without tools
-        if step == max_steps - 1:
-            if status_msg:
-                try:
-                    await status_msg.edit("📝 در حال تنظیم پاسخ نهایی...")
-                except Exception:
-                    pass
-            final_ans = await asyncio.to_thread(_final_answer_without_tools, messages)
-            if final_ans:
-                return final_ans
-            break
+        chat_id_val = str(getattr(event, "chat_id", "")) if getattr(event, "chat_id", None) else None
+        req_id = f"req_{int(time.time()*1000)}_{random.randint(100, 999)}"
 
-        # Model inference step with strict role-based and taint-aware tool definitions schema
-        active_tools_def = tools.get_all_tool_definitions(is_owner=is_owner, tainted=tainted)
-        msg = await asyncio.to_thread(_call_model_step, messages, tools_def=active_tools_def)
-        if not msg:
-            break
+        initial_tainted = False
+        if not is_owner:
+            initial_tainted = True
+        if context and ("(کاربر" in context or "پیام ریپلای" in context or "مخاطب:" in context):
+            initial_tainted = True
 
-        tool_calls = msg.get("tool_calls")
-        content = (msg.get("content") or "").strip()
+        self.state = AgentState(
+            request_id=req_id,
+            chat_id=chat_id_val,
+            is_owner=is_owner,
+            sender_name=sender_name,
+            tainted=initial_tainted,
+            step=0,
+            max_steps=self.max_steps,
+            messages=[]
+        )
 
-        # Fallback for pure JSON tool calls formatted in message text
-        if not tool_calls and content:
-            tool_calls = _extract_tool_calls_from_text(content)
-
-        # No tool call required; direct conversational response is ready
-        if not tool_calls:
-            if content:
-                return content
-            break
-
-        # Append assistant tool-call turn to history
-        messages.append({
-            "role": "assistant",
-            "content": content or None,
-            "tool_calls": tool_calls
-        })
-
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            name = fn.get("name", "")
-            raw_args = fn.get("arguments", "{}")
-            tc_id = tc.get("id") or f"call_{int(time.time()*1000)}"
-
-            if isinstance(raw_args, str):
-                try:
-                    args = json.loads(raw_args)
-                except Exception as e:
-                    out_str = f"خطا در ساختار ورودی JSON ابزار {name}: {e}"
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "name": name,
-                        "content": out_str
-                    })
-                    continue
-            else:
-                args = raw_args or {}
-
-            # Prevent redundant duplicate tool executions with identical arguments
-            call_sig = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
-            if call_sig in executed_calls:
-                out_str = f"{executed_calls[call_sig]}\n(توجه: این ابزار با همین ورودی قبلاً در همین درخواست اجرا شده؛ تکرار نکنید.)"
-            elif tainted and name not in tools.POST_TAINT_ALLOWED_TOOLS:
-                # Deny-by-default hard quarantine: untrusted external content restricts all network and sensitive tools
-                out_str = (
-                    f"⛔ قرنطینه امنیتی فعال است (Taint Quarantine): "
-                    f"ابزار '{name}' پس از دریافت داده‌های خارجی (وب/یوتیوب/کانال) به دلیل پیشگیری از تزریق پرامپت و نشت اطلاعات مسدود است. "
-                    f"تنها پاسخ متنی مستقیم به کاربر مجاز است."
-                )
-            else:
-                timeout_sec = 300 if name in ("generate_meme", "roast_target", "send_voice_note", "search_music", "fetch_and_forward_movie") else 90
-                try:
-                    tool_output = await asyncio.wait_for(
-                        tools.execute_tool(name, args, event, client, status_msg),
-                        timeout=timeout_sec
-                    )
-                except asyncio.TimeoutError:
-                    tool_output = f"خطای ابزار {name}: زمان اجرای ابزار به پایان رسید (تایم‌اوت {timeout_sec} ثانیه)."
-                except Exception as err:
-                    tool_output = f"خطای پیش‌بینی‌نشده در اجرای ابزار {name}: {err}"
-
-                out_str = str(tool_output)
-                if len(out_str) > 6000:
-                    out_str = out_str[:6000] + "\n... [خروجی به دلیل حجم زیاد کوتاه شد]"
-                executed_calls[call_sig] = out_str
-                last_tool_output = out_str
-
-            # Flag external content for isolated context handling
-            if name in tools.UNTRUSTED_SOURCE_TOOLS:
-                tainted = True
-                _last_run_tainted.set(True)
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc_id,
-                "name": name,
-                "content": out_str
-            })
-
-            # Early exits for tools requiring immediate user intervention
-            if out_str.startswith("__ASK_USER__:"):
-                return out_str.replace("__ASK_USER__:", "").strip()
-            if out_str.startswith("__VOICE_SENT__:") or out_str.startswith("__DRAFT_SENT__:") or out_str in ("__ROAST_SENT__", "__MEME_SENT__"):
-                return out_str
-            if out_str == "__PENDING_SORT__":
-                return "پیشنهاد دسته‌بندی کانال‌ها ارسال شد. لطفاً تایید یا لغو کنید."
-            if out_str.startswith("__PENDING_SKILL__"):
-                return "کد اسکیل پیشنهادی ارسال شد. لطفاً بررسی کن و «آره» یا «نه» بگو."
-
-        if status_msg:
+    async def update_status(self, text: str) -> None:
+        if self.status_msg:
             try:
-                await status_msg.edit("📝 در حال تنظیم پاسخ نهایی...")
+                await self.status_msg.edit(text)
             except Exception:
                 pass
 
-    _last_run_tainted.set(tainted)
+    async def run(self) -> str:
+        env_context = await build_environment_context(self.event, self.client)
+        from core import memory
+        scope_id = memory.get_event_memory_scope(self.event) if self.event else memory.normalize_scope_id(self.state.chat_id)
+        messages = _build_agent_messages(
+            self.question,
+            self.context,
+            self.memory_str,
+            is_owner=self.is_owner,
+            sender_name=self.sender_name,
+            env_context=env_context,
+            chat_id=self.state.chat_id,
+            scope_id=scope_id
+        )
+        self.state.messages = messages
+        _last_run_tainted.set(self.state.tainted)
 
-    # End of steps: final turn is strictly conversational text (no further tool execution)
-    # Final synthesis response formatting
-    final_ans = await asyncio.to_thread(_final_answer_without_tools, messages)
-    if final_ans:
-        if tainted:
-            final_ans = sanitize_tainted_output(final_ans)
-        return final_ans
+        last_tool_output = None
 
-    if last_tool_output and not last_tool_output.startswith("خطای"):
-        if tainted:
-            return sanitize_tainted_output(last_tool_output)
-        return last_tool_output
+        for step in range(self.state.max_steps):
+            self.state.step = step
 
-    fallback_ans = await asyncio.to_thread(ai.ask, question, context, memory_str)
-    if tainted:
-        return sanitize_tainted_output(fallback_ans)
-    return fallback_ans
+            if step == self.state.max_steps - 1:
+                await self.update_status("📝 در حال تنظیم پاسخ نهایی...")
+                final_ans = await asyncio.to_thread(_final_answer_without_tools, self.state.messages)
+                if final_ans:
+                    self.state.final_response = final_ans
+                    return self._finalize(final_ans)
+                break
+
+            active_tools_def = tools.get_all_tool_definitions(is_owner=self.state.is_owner, tainted=self.state.tainted)
+            msg = await asyncio.to_thread(_call_model_step, self.state.messages, tools_def=active_tools_def)
+
+            if not msg:
+                self.state.errors.append(f"Model step failed at step {step}")
+                break
+
+            tool_calls = msg.get("tool_calls")
+            content = (msg.get("content") or "").strip()
+
+            if not tool_calls and content:
+                tool_calls = _extract_tool_calls_from_text(content)
+
+            if not tool_calls:
+                if content:
+                    self.state.final_response = content
+                    return self._finalize(content)
+                break
+
+            self.state.messages.append({
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": tool_calls
+            })
+
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name", "")
+                raw_args = fn.get("arguments", "{}")
+                tc_id = tc.get("id") or f"call_{int(time.time()*1000)}"
+
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception as e:
+                        err_feedback = f"خطا در ساختار ورودی JSON ابزار {name}: {e}. لطفاً پارامترها را به شکل JSON معتبر ارسال کنید."
+                        self.state.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "name": name,
+                            "content": err_feedback
+                        })
+                        self.state.errors.append(err_feedback)
+                        continue
+                else:
+                    args = raw_args or {}
+
+                call_sig = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+                if call_sig in self.state.executed_calls:
+                    out_str = f"{self.state.executed_calls[call_sig]}\n(توجه: این ابزار با همین ورودی قبلاً در همین درخواست اجرا شده؛ تکرار نکنید.)"
+                elif self.state.tainted and name not in tools.POST_TAINT_ALLOWED_TOOLS:
+                    out_str = (
+                        f"⛔ قرنطینه امنیتی فعال است (Taint Quarantine): "
+                        f"ابزار '{name}' پس از دریافت داده‌های خارجی به دلیل پیشگیری از نشت اطلاعات مسدود است. "
+                        f"تنها پاسخ متنی مستقیم به کاربر مجاز است."
+                    )
+                else:
+                    timeout_sec = 300 if name in ("generate_meme", "roast_target", "send_voice_note", "search_music", "fetch_and_forward_movie") else 90
+                    try:
+                        if not self.state.is_owner or self.state.tainted:
+                            tool_output = await asyncio.wait_for(
+                                tools.execute_tool(name, args, self.event, self.client, self.status_msg, is_owner=self.state.is_owner, tainted=self.state.tainted),
+                                timeout=timeout_sec
+                            )
+                        else:
+                            tool_output = await asyncio.wait_for(
+                                tools.execute_tool(name, args, self.event, self.client, self.status_msg),
+                                timeout=timeout_sec
+                            )
+                    except asyncio.TimeoutError:
+                        tool_output = f"خطای ابزار {name}: زمان اجرای ابزار به پایان رسید (تایم‌اوت {timeout_sec} ثانیه)."
+                        self.state.errors.append(f"Timeout in {name}")
+                    except Exception as err:
+                        tool_output = f"خطای پیش‌بینی‌نشده در اجرای ابزار {name}: {err}"
+                        self.state.errors.append(f"Error in {name}: {err}")
+
+                    out_str = str(tool_output)
+                    if len(out_str) > 6000:
+                        out_str = out_str[:6000] + "\n... [خروجی به دلیل حجم زیاد کوتاه شد]"
+                    self.state.executed_calls[call_sig] = out_str
+                    self.state.tool_outputs.append((name, out_str))
+                    last_tool_output = out_str
+
+                if name in tools.UNTRUSTED_SOURCE_TOOLS:
+                    self.state.tainted = True
+                    _last_run_tainted.set(True)
+
+                self.state.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": name,
+                    "content": out_str
+                })
+
+                if out_str.startswith("__ASK_USER__:"):
+                    return out_str.replace("__ASK_USER__:", "").strip()
+                if out_str.startswith("__VOICE_SENT__:") or out_str.startswith("__DRAFT_SENT__:") or out_str in ("__ROAST_SENT__", "__MEME_SENT__"):
+                    return out_str
+                if out_str == "__PENDING_SORT__":
+                    return "پیشنهاد دسته‌بندی کانال‌ها ارسال شد. لطفاً تایید یا لغو کنید."
+                if out_str.startswith("__PENDING_SKILL__"):
+                    return "کد اسکیل پیشنهادی ارسال شد. لطفاً بررسی کن و «آره» یا «نه» بگو."
+
+            await self.update_status("📝 در حال تنظیم پاسخ نهایی...")
+
+        _last_run_tainted.set(self.state.tainted)
+
+        final_ans = await asyncio.to_thread(_final_answer_without_tools, self.state.messages)
+        if final_ans:
+            # گارد اعتبارسنجی حقیقت‌گویی: جلوگیری قطعی از توهم موفقیت هنگام شکست ابزارهای عملیاتی
+            if last_tool_output and (last_tool_output.startswith("❌") or last_tool_output.startswith("خطا") or "پاسخگو نبودند" in last_tool_output):
+                claims_success = any(w in final_ans for w in ("ارسال شد", "برات فرستادم", "دانلود شد و", "فایل ویدیو ارسال", "فایل صوتی ارسال", "موفقیت ارسال"))
+                admits_failure = any(w in final_ans for w in ("خطا", "متأسفانه", "ناموفق", "نتونستم", "پاسخگو نبود", "مشکل", "ارسال نشد"))
+                if claims_success and not admits_failure:
+                    final_ans = f"متأسفانه در انجام عملیات خطایی رخ داد:\n{last_tool_output}"
+            return self._finalize(final_ans)
+
+        if last_tool_output:
+            return self._finalize(last_tool_output)
+
+        fallback_ans = await asyncio.to_thread(ai.ask, self.question, self.context, self.memory_str)
+        if fallback_ans and fallback_ans.strip() != getattr(ai, "OFFLINE_MSG", ""):
+            return self._finalize(fallback_ans)
+
+        recovery_msg = (
+            "متأسفانه در حال حاضر به دلیل ترافیک بالای سرورها یا اتمام موقت سهمیه ارائه‌دهندگان هوش مصنوعی، "
+            "پاسخ‌گویی با اختلال مواجه شد. لطفاً چند لحظه بعد دوباره امتحان کن یا با دستور /models مدل دیگری را انتخاب کن رفیق."
+        )
+        return self._finalize(recovery_msg)
+
+    def _finalize(self, text: str) -> str:
+        self.state.completed = True
+        # گارد جامع حقیقت‌گویی و ضدتوهم در خروجی نهایی
+        last_out = self.state.tool_outputs[-1][1] if self.state.tool_outputs else ""
+        if last_out and (last_out.startswith("❌") or last_out.startswith("خطا") or "پاسخگو نبودند" in last_out):
+            claims_success = any(w in text for w in ("ارسال شد", "برات فرستادم", "دانلود شد و", "فایل ویدیو ارسال", "فایل صوتی ارسال", "موفقیت ارسال", "فرستادم برات"))
+            admits_failure = any(w in text for w in ("خطا", "متأسفانه", "ناموفق", "نتونستم", "پاسخگو نبود", "مشکل", "ارسال نشد"))
+            if claims_success and not admits_failure:
+                text = f"متأسفانه در انجام عملیات خطایی رخ داد:\n{last_out}"
+        self.state.final_response = text
+        if self.state.tainted:
+            return sanitize_tainted_output(text)
+        return text
+
+
+async def run_agent(question: str, context: str, memory_str: str, event, client, status_msg=None, max_steps: int = 5, is_owner: bool = True, sender_name: str = "") -> str:
+    """Autonomous ReAct agent decision loop (Reasoning + Acting + Observing)."""
+    cycle = AgentExecutionCycle(
+        question=question,
+        context=context,
+        memory_str=memory_str,
+        event=event,
+        client=client,
+        status_msg=status_msg,
+        max_steps=max_steps,
+        is_owner=is_owner,
+        sender_name=sender_name
+    )
+    return await cycle.run()

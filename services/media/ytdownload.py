@@ -87,7 +87,12 @@ async def _run_bot_download(
                         await status.edit("🎬 فایل ویدیویی دریافت شد؛ در حال ارسال به شما...")
                     except Exception:
                         pass
-                await client.forward_messages(event.chat_id, m)
+                try:
+                    await client.forward_messages(event.chat_id, m)
+                except Exception as e:
+                    for ch in joined_channels:
+                        await fetch._leave(client, ch)
+                    return False, f"❌ خطا در ارسال تلگرام: فایل ویدیو با موفقیت از سرور دانلود دریافت شد اما فوروارد آن به این چت ناموفق بود ({e})."
                 # ترک کانال‌های اسپانسری که احیاناً عضو شده بودیم
                 for ch in joined_channels:
                     await fetch._leave(client, ch)
@@ -179,6 +184,8 @@ async def download_youtube_video(
     ok, msg = await _run_bot_download(client, PRIMARY_BOT, clean_url, target_quality, event, status)
     if ok:
         return msg
+    if "خطا در ارسال تلگرام" in msg:
+        return msg
 
     # ۲. تلاش با ربات‌های پشتیبان در صورت عدم پاسخ ربات اول
     for fallback in FALLBACK_BOTS:
@@ -190,5 +197,7 @@ async def download_youtube_video(
         ok_fb, msg_fb = await _run_bot_download(client, fallback, clean_url, target_quality, event, status)
         if ok_fb:
             return msg_fb
+        if "خطا در ارسال تلگرام" in msg_fb:
+            return msg_fb
 
-    return f"متأسفانه ربات‌های دانلود تلگرام در این لحظه پاسخگو نبودند. می‌توانید مستقیماً لینک را در @{PRIMARY_BOT} ارسال کنید."
+    return f"❌ خطا در دانلود: متأسفانه ربات‌های دانلود تلگرام در این لحظه پاسخگو نبودند. می‌توانید مستقیماً لینک را در @{PRIMARY_BOT} ارسال کنید."

@@ -7,7 +7,7 @@ import os
 import re
 import time
 from collections import deque
-from typing import Optional
+from typing import Any, Optional
 
 from telethon import Button, TelegramClient, events, types
 
@@ -260,25 +260,188 @@ def strip_trigger(text: str) -> str:
     return t.strip().strip("،,:.؟? ")
 
 
-async def get_context(event) -> str:
+async def get_reply_info(event, client=None) -> Optional[dict]:
+    """Extract structured context from replied-to Telegram messages, resolving author identity, text, and media."""
+    reply_id = getattr(event, "reply_to_msg_id", None)
+    if not reply_id:
+        return None
+
+    cli = client or globals().get("client")
+    reply_msg = None
     try:
-        msgs = await client.get_messages(event.chat_id, limit=8)
+        if cli and getattr(event, "chat_id", None):
+            reply_msg = await cli.get_messages(event.chat_id, ids=reply_id)
+        elif hasattr(event, "get_reply_message"):
+            reply_msg = await event.get_reply_message()
     except Exception:
-        return ""
-    lines = []
+        reply_msg = None
+
+    if reply_msg is None or not getattr(reply_msg, "id", None):
+        return {
+            "has_reply": True,
+            "is_available": False,
+            "reply_id": reply_id,
+            "author_id": None,
+            "author_name": None,
+            "text": "",
+            "media_type": None,
+            "yt_id": None,
+            "social_url": None,
+            "msg": None
+        }
+
+    author_id = getattr(reply_msg, "sender_id", None)
+    author_name = "کاربر"
+    try:
+        sender = await reply_msg.get_sender()
+        if sender:
+            author_name = getattr(sender, "first_name", "") or getattr(sender, "title", "") or "کاربر"
+    except Exception:
+        pass
+
+    text = getattr(reply_msg, "raw_text", None) or getattr(reply_msg, "message", None) or ""
+    media_type = None
+    if getattr(reply_msg, "photo", None):
+        media_type = "photo"
+    elif getattr(reply_msg, "video", None) and not getattr(reply_msg, "video_note", None):
+        media_type = "video"
+    elif getattr(reply_msg, "voice", None) or getattr(reply_msg, "audio", None) or getattr(reply_msg, "video_note", None):
+        media_type = "voice"
+    elif getattr(reply_msg, "document", None):
+        media_type = "document"
+
+    try:
+        from services.media import ytsummary, socialdl
+        yt_id = ytsummary.extract_youtube_id(text)
+        social_url = socialdl.extract_social_url(text)
+    except Exception:
+        yt_id = None
+        social_url = None
+
+    return {
+        "has_reply": True,
+        "is_available": True,
+        "reply_id": reply_id,
+        "author_id": author_id,
+        "author_name": author_name,
+        "text": text,
+        "media_type": media_type,
+        "yt_id": yt_id,
+        "social_url": social_url,
+        "msg": reply_msg
+    }
+
+
+async def get_context(event) -> str:
+    """Build situational context for the request, including chat environment, sender identity, and reply context."""
+    cli = globals().get("client")
+    owner_id = globals().get("_owner_id")
+    if owner_id is None:
+        try:
+            from core import memory as _m
+            owner_id = _m.get_owner_id()
+        except Exception:
+            owner_id = None
+
+    chat_id = getattr(event, "chat_id", None)
+    is_priv = getattr(event, "is_private", False)
+    is_grp = getattr(event, "is_group", False)
+    is_chan = getattr(event, "is_channel", False)
+
+    env_lines = []
+
+    # ۱. شناسایی محیط چت (محیط گفتگو، Saved Messages، گروه یا PV)
+    if is_priv and owner_id and int(chat_id or 0) == int(owner_id):
+        env_lines.append("[محیط مکالمه: پیام‌های ذخیره‌شده (Saved Messages / فضای شخصی مالک)]")
+    elif is_grp:
+        chat_title = ""
+        try:
+            chat = getattr(event, "chat", None)
+            chat_title = getattr(chat, "title", "")
+        except Exception:
+            pass
+        group_type = "سوپرگروه" if getattr(getattr(event, "chat", None), "megagroup", False) else "گروه"
+        env_lines.append(f"[محیط مکالمه: {group_type} «{chat_title or 'گروه'}» (شناسه: {chat_id})]")
+    elif is_priv:
+        sender_name = ""
+        try:
+            sender = getattr(event, "sender", None)
+            if sender:
+                sender_name = getattr(sender, "first_name", "") or getattr(sender, "title", "")
+        except Exception:
+            pass
+        env_lines.append(f"[محیط مکالمه: گفتگوی خصوصی (PV) با کاربر {sender_name or 'مخاطب'} (شناسه: {chat_id})]")
+    elif is_chan:
+        env_lines.append(f"[محیط مکالمه: کانال تلگرام (شناسه: {chat_id})]")
+
+    # ۲. هویت فرستنده فعلی با تفکیک قطعی شناسه یکتا از نام نمایشی
+    cur_sender_id = getattr(event, "sender_id", None)
+    cur_sender_name = ""
+    try:
+        s = getattr(event, "sender", None)
+        if s:
+            cur_sender_name = getattr(s, "first_name", "")
+    except Exception:
+        pass
+    is_cur_owner = (owner_id and int(cur_sender_id or 0) == int(owner_id)) or (getattr(event, "out", False) and not getattr(event, "fwd_from", None))
+    owner_label = "صاحب اکانت" if is_cur_owner else "کاربر عادی"
+    if cur_sender_id is not None:
+        env_lines.append(f"[فرستنده درخواست: {cur_sender_name or 'کاربر'} (شناسه عددی تلگرام: {cur_sender_id}, نقش: {owner_label})]")
+
+    # ۳. استخراج پیام ارجاع‌شده در صورت ریپلای
+    reply_id = getattr(event, "reply_to_msg_id", None)
+    if reply_id:
+        r_info = await get_reply_info(event, cli)
+        if r_info:
+            if not r_info.get("is_available"):
+                env_lines.append(f"[پیام ارجاع‌شده (Reply): پیام اصلی با شناسه {reply_id} حذف شده یا قابل دسترسی نیست]")
+            else:
+                r_author = r_info.get("author_name") or "کاربر"
+                r_author_id = r_info.get("author_id")
+                r_text = (r_info.get("text") or "").strip().replace("\n", " ")[:600]
+                media_note = f" (نوع رسانه: {r_info['media_type']})" if r_info.get("media_type") else ""
+                id_info = f" با شناسه {r_author_id}" if r_author_id is not None else ""
+                env_lines.append(f"[پیام ارجاع‌شده (Reply) از {r_author}{id_info} - شناسه پیام {reply_id}{media_note}]: «{r_text}»")
+
+    # ۴. پیام‌های اخیر گفتگو
+    history_lines = []
     seen = set()
-    for m in reversed(list(msgs)):
-        if m.id == event.id or m.id in self_sent:
-            continue
-        if not m.message:
-            continue
-        clean_text = m.message.strip().replace("\n", " ")[:150]
-        if clean_text in seen:
-            continue
-        seen.add(clean_text)
-        who = "کاربر" if m.out else "دیگران"
-        lines.append(f"{who}: {clean_text}")
-    return "\n".join(lines)
+    try:
+        if cli and getattr(event, "chat_id", None):
+            msgs = await cli.get_messages(event.chat_id, limit=8)
+            for m in reversed(list(msgs)):
+                if getattr(m, "id", None) == getattr(event, "id", None) or getattr(m, "id", None) in self_sent:
+                    continue
+                if not getattr(m, "message", None):
+                    continue
+                clean_text = m.message.strip().replace("\n", " ")[:200]
+                if clean_text in seen:
+                    continue
+                seen.add(clean_text)
+                if is_grp:
+                    s_name = "کاربر"
+                    try:
+                        s_obj = getattr(m, "sender", None)
+                        if s_obj:
+                            s_name = getattr(s_obj, "first_name", "") or "کاربر"
+                    except Exception:
+                        pass
+                    m_sid = getattr(m, "sender_id", "نامشخص")
+                    history_lines.append(f"{s_name} (ID: {m_sid}): {clean_text}")
+                else:
+                    who = "کاربر" if getattr(m, "out", False) else "دیگران"
+                    history_lines.append(f"{who}: {clean_text}")
+    except Exception:
+        pass
+
+    res = []
+    if env_lines:
+        res.extend(env_lines)
+    if history_lines:
+        res.append("--- پیام‌های اخیر چت ---")
+        res.extend(history_lines)
+
+    return "\n".join(res)
 
 
 def _find_dialog(name_to_dialog: dict, label: str):
@@ -375,10 +538,11 @@ async def _answer_pending(event, p: dict, text: str) -> None:
     kind = p.get("kind")
     if kind == "confirm_add_memory":
         fact = p.get("fact", "")
+        scope_id = p.get("scope_id") or memory.get_event_memory_scope(event, owner_id=_owner_id)
         if _answer_yes(text, ("ذخیره کن", "ثبت کن", "یادت باشه")):
             if fact:
-                memory.add_memory(fact)
-                await event.reply(f"✅ واقعیت با موفقیت در حافظه ماندگار ذخیره شد:\n«{fact}»")
+                memory.add_memory(fact, scope_id=scope_id, chat_id=event.chat_id)
+                await event.reply(f"✅ واقعیت با موفقیت در حافظه ماندگار این گفتگو ذخیره شد:\n«{fact}»")
             else:
                 await event.reply("❌ متنی برای ذخیره داده نشد.")
         else:
@@ -443,8 +607,9 @@ async def _answer_pending(event, p: dict, text: str) -> None:
             await event.reply("باشه، حذف پوشه لغو شد.")
         return
     if kind == "confirm_clear_memory":
+        scope_id = p.get("scope_id") or memory.get_event_memory_scope(event, owner_id=_owner_id)
         if _answer_yes(text, ("پاک کن", "خالی کن")):
-            memory.clear_memory()
+            memory.clear_memory(scope_id=scope_id)
             await event.reply("🗑 تمام حافظه ماندگار کاپری پاک شد.")
         else:
             await event.reply("باشه، پاک‌کردن حافظه لغو شد.")
@@ -570,11 +735,11 @@ async def send_images(event, query: str, limit: int = 3):
     return "🖼 نتونستم عکس رو دانلود کنم."
 
 
-def _learn(question: str, answer: str) -> None:
+def _learn(question: str, answer: str, scope_id: Optional[str] = None, chat_id: Optional[Any] = None) -> None:
     try:
         fact = ai.extract_fact(question, answer)
         if fact:
-            memory.add_memory(fact)
+            memory.add_memory(fact, scope_id=scope_id, chat_id=chat_id)
     except Exception:
         pass
 
@@ -584,7 +749,7 @@ _learn_lock = asyncio.Lock()
 _PERSONAL_MARKERS = ("من ", " من", "دوست دارم", "علاقه", "ترجیح", "کارم", "شغلم", "اسمم", "سنم", "یادم", "همیشه", "بلدم", "بدم میاد", "عاشق")
 
 
-async def _trigger_learn(question: str, answer: str) -> None:
+async def _trigger_learn(question: str, answer: str, scope_id: Optional[str] = None, chat_id: Optional[Any] = None) -> None:
     global _last_learn_time
     q = (question or "").strip()
     if len(q) < 15:
@@ -599,12 +764,13 @@ async def _trigger_learn(question: str, answer: str) -> None:
     async with _learn_lock:
         _last_learn_time = time.time()
         try:
-            await asyncio.to_thread(_learn, question, answer)
+            await asyncio.to_thread(_learn, question, answer, scope_id, chat_id)
         except Exception as e:
             log.debug("Fact learning exception: %s", e)
         try:
-            # تأمل شناختی خودکار و به‌روزرسانی حافظه در پس‌زمینه (Autonomous Cognitive Reflection)
-            await cognitive_memory.reflect_interaction(question, answer)
+            # تأمل شناختی خودکار منحصراً در گفتگوهای خصوصی یا سیو مسیج
+            if not scope_id or ":group:" not in str(scope_id):
+                await cognitive_memory.reflect_interaction(question, answer)
         except Exception as e:
             log.debug("Cognitive reflection exception: %s", e)
 
@@ -896,26 +1062,65 @@ def _is_web_question(q: str) -> bool:
     return any(w in q for w in _WEB_FRESH_WORDS)
 
 
-# Tool command routing keywords
+# کلمه‌هایی که نشان می‌دهند پیام یک «دستور ابزار» است (نه سوال ساده) و باید به ایجنت برود
 _TOOL_TRIGGER_WORDS = (
-    "لفت", "عضو شو", "عضو شدم", "جوین", "پوشه", "فایل", "سند",
+    "لفت", "عضو شو", "عضو شدم", "جوین", "پوشه",
     "آهنگ", "اهنگ", "موزیک", "موسیقی", "بگیر بیار", "دانلود",
-    "یوتیوب", "youtube", "youtu.be", "عکس", "تصویر", "پوستر", "ویس", "صوتی",
+    "تصویر", "پوستر", "صوتی",
     "یادت باشه", "فراموش کن", "قانون", "حافظه",
     "روست", "تیکه", "ضایع", "میم", "وایب", "نیت", "جوابشو بده", "جوابشو نده",
-    "قیمت", "اخبار", "خبر", "آپدیت", "اپدیت", "نرخ", "وضعیت",
+    "قیمت", "اخبار", "آپدیت", "اپدیت", "نرخ", "وضعیت",
     "بفرست", "پیدا کن", "بگرد", "سرچ", "جستجو", "برام بگرد", "برام پیدا",
-    "ترجمه", "بریفینگ", "خلاصه", "صورتجلسه", "مرتب",
+    "ترجمه", "بریفینگ", "صورتجلسه", "مرتب",
     "کد بزن", "برنامه بنویس", "اسکریپت", "دیتابیس", "بشین کد بزن",
-    "پیام", "اسکیل", "ساعت", "بهش بگو", "براش بگو", "بهش پیام", "پیش‌نویس",
-    "یادآور", "یادآوری", "ریمایندر", "آلارم", "پاک کن", "حذف کن", "لغو کن", "یادآورهام", "یادآورام",
+    "اسکیل", "بهش بگو", "براش بگو", "بهش پیام", "پیش‌نویس", "پیش نویس",
+    "یادآور", "یادآوری", "ریمایندر", "آلارم", "یادم بنداز", "پاک کن", "حذف کن", "لغو کن", "یادآورهام", "یادآورام",
 )
+
+# کلمات کلیدی تک‌سیلابی که برای جلوگیری از همپوشانی زیررشته‌ای (مثل برنامه‌نویسی یا برعکس)، باید به عنوان کلمه مستقل تطبیق داده شوند
+_DISCRETE_TRIGGER_WORDS = ("ویس", "عکس", "فایل", "سند", "خبر")
+
+
+def _is_summary_request(text: str) -> bool:
+    """تشخیص قصد خلاصه‌سازی، چکیده یا توضیح موضوع ویدیو/محتوا."""
+    t = (text or "").lower()
+    return any(w in t for w in (
+        "خلاصه", "خلاصش", "چکیده", "چی میگه", "چی میگن", "موضوعش چیه",
+        "توضیح بده", "درباره چیه", "نکات مهم", "خلاصه کن", "summarize", "summary"
+    ))
+
+
+def _is_video_info_request(text: str) -> bool:
+    """تشخیص قصد دریافت متادیتا، مدت زمان، نام کانال یا مشخصات ویدیو بدون دانلود."""
+    t = (text or "").lower()
+    return any(w in t for w in (
+        "مشخصات", "اطلاعات", "مدت زمان", "چند دقیقه", "کی منتشر", "کی ساخته",
+        "کانالش چیه", "سازندش کیه", "تعداد بازدید", "چند تا بازدید", "چند بازدید",
+        "آمار ویدیو", "metadata", "info", "details"
+    ))
+
+
+def _is_download_request(text: str) -> bool:
+    """تشخیص قصد صریح دانلود فایل مدیا."""
+    t = (text or "").lower()
+    return any(w in t for w in (
+        "دانلود", "دان کن", "بگیر بیار", "بفرستش", "فایلشو بده", "فایلشو بفرست",
+        "فایل ویدیو", "کیفیت", "download", "ذخیره کن", "سیو کن"
+    ))
 
 
 def _is_simple_question(q: str) -> bool:
     """سوال ساده/گفتگویی (بدون ابزار) که می‌شود مستقیم و سریع جواب داد."""
     q = q or ""
-    return not any(w in q for w in _TOOL_TRIGGER_WORDS)
+    # وجود هرگونه لینک رسانه‌ای نیاز به هدایت به ابزار مربوطه دارد
+    if re.search(r"(?:youtube\.com|youtu\.be|instagram\.com|tiktok\.com|twitter\.com|x\.com|pin\.it|pinterest\.com|soundcloud\.com)", q, re.I):
+        return False
+    if any(w in q for w in _TOOL_TRIGGER_WORDS):
+        return False
+    for dw in _DISCRETE_TRIGGER_WORDS:
+        if re.search(r"(?:^|[^\w\u0600-\u06FF])" + re.escape(dw) + r"(?:[^\w\u0600-\u06FF]|$)", q):
+            return False
+    return True
 
 
 def _is_ghost_deactivate(q: str) -> bool:
@@ -1016,13 +1221,14 @@ async def _handle_voice(event, status, msg, question) -> None:
             await status.edit(answer)
             return
 
-        # Voice message transcription & bidirectional voice chat
+        # ۴. کاربر خودش ویس فرستاده و به عنوان پرامپت با کاپری صحبت کرده است (مکالمه صوتی دوطرفه)
         if any(w in question.lower() for w in RESEARCH_WORDS):
             await _stage(status, "🔍 در حال کاوش سه‌زبانه (انگلیسی، چینی، فارسی) و تحلیل تخصصی...")
         else:
             await _stage(status, "🤔 دارم فکر می‌کنم...")
-        mem = memory.relevant_facts(text)
-        answer = await asyncio.to_thread(ai.ask, text, context, mem)
+        scope_id = memory.get_event_memory_scope(event, owner_id=_owner_id)
+        mem = memory.relevant_facts(text, scope_id=scope_id)
+        answer = await asyncio.to_thread(ai.ask, text, context, mem, chat_id=scope_id)
         await _stage(status, "🔊 دارم جواب رو صوتی می‌کنم...")
         mp3 = os.path.join(config.DOWNLOAD_DIR, f"reply_{int(time.time() * 1000)}.mp3")
         ok = await voice.speak(answer, mp3, client=client)
@@ -1051,8 +1257,8 @@ async def _handle_voice(event, status, msg, question) -> None:
                 pass
         is_owner_voice = getattr(msg, "out", False) and not getattr(msg, "fwd_from", None)
         if is_owner_voice and not agent.get_last_run_tainted():
-            memory.remember_exchange(event.chat_id, text, answer)
-            asyncio.get_running_loop().create_task(asyncio.to_thread(_learn, text, answer))
+            memory.remember_exchange(scope_id, text, answer)
+            asyncio.get_running_loop().create_task(asyncio.to_thread(_learn, text, answer, scope_id, event.chat_id))
         _safe_unlink(mp3)
     except Exception as e:
         log.error("Error in _handle_voice: %s", type(e).__name__, exc_info=True)
@@ -1776,7 +1982,7 @@ async def on_outgoing(event):
                     await event.reply("❌ خطایی در انجام عملیات رخ داد؛ لطفاً دوباره تلاش کنید.")
                 return
 
-    # Outgoing message trigger processing
+    # طبق ضوابط امنیتی، در on_outgoing فقط پیام‌هایی پردازش می‌شوند که تریگر در ابتدای متن باشد
     if not starts_with_trigger(text):
         return
 
@@ -1804,17 +2010,91 @@ async def on_outgoing(event):
         status = await event.reply("🧠 در حال جمع‌آوری اطلاعات...")
         self_sent.add(status.id)
 
-        # دانلود خودکار لینک شبکه‌های اجتماعی (تیک‌تاک/اینستا/پینترست/توییتر/ساندکلاد)
+        # استخراج داده‌های پیام ریپلای‌شده در صورت وجود
+        reply_info = await get_reply_info(event, client)
+
+        # اگر کاربر روی پیامی ریپلای کرده و پرسیده «این عکس چیه؟» اما عکسی وجود ندارد یا پیام حذف شده
+        if getattr(event, "reply_to_msg_id", None) and any(w in question for w in ("این عکس چیه", "این تصویر چیه", "عکس چیه", "تصویر چیه", "عکس رو ببین", "عکس چیست")):
+            if reply_info and not reply_info.get("is_available"):
+                await _safe_edit_or_send(event, status, "❌ پیامی که به آن ریپلای زدید در دسترس نیست یا احتمالاً حذف شده است.")
+                return
+            if not reply_info or reply_info.get("media_type") != "photo":
+                await _safe_edit_or_send(event, status, "ℹ️ پیامی که به آن ریپلای زدید فاقد تصویر است یا فایل تصویر آن در دسترس نیست.")
+                return
+
+        # اگر کاربر روی پیامی ریپلای کرده که حذف شده و خواسته خلاصه‌اش کند یا درباره‌اش سوال کرده
+        if getattr(event, "reply_to_msg_id", None) and reply_info and not reply_info.get("is_available"):
+            if _is_summary_request(question) or any(w in question for w in ("این چیه", "نظرت چیه", "بررسی کن", "توضیح بده")):
+                await _safe_edit_or_send(event, status, "❌ پیامی که به آن ریپلای زدید در دسترس نیست یا احتمالاً حذف شده است.")
+                return
+
+        # ۱. مسیریابی هوشمند لینک‌های شبکه‌های اجتماعی (اینستاگرام، تیک‌تاک، پینترست، X، ساوندکلاد)
         from services.media import socialdl
         social_url = socialdl.extract_social_url(question)
+        if not social_url and reply_info and reply_info.get("social_url"):
+            social_url = reply_info["social_url"]
+
         if social_url:
-            await _stage(status, "⬇️ لینک دانلود را تشخیص دادم؛ دارم فایل را می‌گیرم...")
-            try:
-                result = await socialdl.download_social(client, social_url, event=event, status=status)
-            except Exception as e:
-                result = f"❌ خطا در دانلود: {logger.redact_secrets(str(e))}"
-            await _safe_edit_or_send(event, status, result)
-            return
+            # اگر کاربر سوال محتوایی یا درخواست خلاصه‌سازی دارد، دانلود خودکار نکن تا ایجنت متن را بررسی کند
+            if not _is_summary_request(question) and not _is_video_info_request(question):
+                await _stage(status, "⬇️ لینک رسانه‌ای تشخیص داده شد؛ در حال دریافت فایل...")
+                try:
+                    result = await socialdl.download_social(client, social_url, event=event, status=status)
+                except Exception as e:
+                    result = f"❌ خطا در دانلود: {logger.redact_secrets(str(e))}"
+                await _safe_edit_or_send(event, status, result)
+                return
+
+        # ۲. مسیریابی دقیق و تفکیک‌شده لینک‌های یوتیوب بر اساس نیت کاربر:
+        from services.media import ytsummary
+        yt_id = ytsummary.extract_youtube_id(question)
+        target_yt = question
+        if not yt_id and reply_info and reply_info.get("yt_id"):
+            yt_id = reply_info["yt_id"]
+            target_yt = reply_info["yt_id"]
+
+        if yt_id:
+            # سناریوی B: خلاصه‌سازی محتوایی و متنی ویدیو
+            if _is_summary_request(question):
+                await _stage(status, "🎬 در حال مطالعه و خلاصه‌سازی هوشمند ویدیوی یوتیوب...")
+                try:
+                    result = await asyncio.to_thread(ytsummary.summarize_youtube_video, target_yt)
+                except Exception as e:
+                    result = f"❌ خطا در خلاصه‌سازی یوتیوب: {logger.redact_secrets(str(e))}"
+                await _safe_edit_or_send(event, status, result)
+                return
+
+            # سناریوی C: اطلاعات و متادیتای ویدیو (بدون دانلود و بدون خلاصه)
+            if _is_video_info_request(question):
+                await _stage(status, "🎬 در حال دریافت مشخصات و متادیتای ویدیو...")
+                try:
+                    result = await asyncio.to_thread(ytsummary.get_youtube_video_info, target_yt)
+                except Exception as e:
+                    result = f"❌ خطا در استخراج اطلاعات یوتیوب: {logger.redact_secrets(str(e))}"
+                await _safe_edit_or_send(event, status, result)
+                return
+
+            # سناریوی A: دانلود صریح فایل ویدیو
+            clean_q = re.sub(r"https?://\S+", "", question).strip()
+            if _is_download_request(question) or len(clean_q) <= 15 or (reply_info and reply_info.get("yt_id")):
+                from services.media import ytdownload
+                await _stage(status, "🎬 در حال آماده‌سازی و دانلود ویدیوی یوتیوب...")
+                try:
+                    q_m = re.search(r"\b(1080|720|480|360)\b", question)
+                    target_q = int(q_m.group(1)) if q_m else 720
+                    result = await ytdownload.download_youtube_video(client, target_yt, quality=target_q, event=event, status=status)
+                except Exception as e:
+                    result = f"❌ خطا در دانلود یوتیوب: {logger.redact_secrets(str(e))}"
+                await _safe_edit_or_send(event, status, result)
+                return
+
+        # ۳. خلاصه‌سازی مستقیم پیام متنی در صورت ریپلای با دستور «خلاصه کن»
+        if _is_summary_request(question) and reply_info and reply_info.get("has_reply") and reply_info.get("text"):
+            r_author = reply_info.get("author_name") or "کاربر"
+            r_id = reply_info.get("author_id")
+            r_text = reply_info.get("text", "").strip()
+            id_str = f" با شناسه {r_id}" if r_id is not None else ""
+            question = f"لطفاً متن پیام زیر از {r_author}{id_str} را با دقت، ساختاریافته و شیوایی به زبان فارسی خلاصه کن:\n\n«{r_text}»"
 
         # حالت رول‌پلی (راوی تعاملی): شروع/پایان/نگه‌داشتن/ادامه + تمام پیام‌های حین بازی
         if await roleplay.handle(event, status, question, client):
@@ -1853,7 +2133,7 @@ async def on_outgoing(event):
             await _safe_edit_or_send(event, status, dash + f"\n\n🆔 شناسه یکتای نمونه: `{config.INSTANCE_ID}`")
             return
 
-        # Chat minutes summarizer skill
+        # خلاصه‌ساز صورتجلسه گروه/چت (مسیر مستقیم و مطمئن، مستقل از ایجنت)
         if _is_group_summary_request(question):
             from ai_engine import skills_manager
             await _stage(status, "📊 دارم پیام‌های اخیر رو می‌خونم و صورتجلسه می‌سازم...")
@@ -1875,7 +2155,7 @@ async def on_outgoing(event):
             await _safe_edit_or_send(event, status, result)
             return
 
-        # Dialog folder classification
+        # مرتب‌سازی خودکار پوشه‌ها (مسیر مستقیم و مطمئن، مستقل از ایجنت)
         if _is_folder_sort_request(question):
             await _stage(status, "🗂 دارم کانال‌ها و گروه‌ها رو بررسی و دسته‌بندی می‌کنم...")
             await _do_sort(event, status)
@@ -1902,7 +2182,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, f"📋 این کانال‌ها رو پیدا کردم:\n{names}\n\nکدام را لفت بزنم؟ بگویید «همه» یا شماره‌ها (مثلاً 1، 3).")
             return
 
-        # Image search dispatch
+        # جستجوی عکس (مسیر مستقیم و سریع، مستقل از ایجنت)
         if _is_image_request(question):
             query = _extract_image_query(question)
             await _stage(status, "🖼 دارم دنبال عکس می‌گردم...")
@@ -1919,7 +2199,7 @@ async def on_outgoing(event):
         if await vault.handle_vault_command(event, status, question):
             return
 
-        # Ghost mode toggle
+        # حالت همزاد: فعال/غیرفعال (فقط مالک)
         if _is_ghost_deactivate(question):
             ghost.deactivate()
             dnd.deactivate_dnd()
@@ -1943,7 +2223,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, summary)
             return
 
-        # Chat analysis report
+        # تحلیل چت: گزارش داده‌محور از تاریخچه چت فعلی (مستقل از ایجنت)
         if chatanalysis.is_chat_analysis_request(question):
             await _stage(status, "🕵️ دارم تاریخچه این چت رو کالبدشکافی می‌کنم...")
             report = await chatanalysis.analyze_chat(client, event)
@@ -1951,17 +2231,18 @@ async def on_outgoing(event):
             await _send_as_md(event, status, report)
             return
 
-        # Agent message loop
+        # ۲. کلیه پیام‌ها مستقیماً وارد ایجنت هوشمند می‌شوند و مدل خودش ابزار را تشخیص می‌دهد
+        scope_id = memory.get_event_memory_scope(event, owner_id=_owner_id)
         context = await get_context(event)
-        hist = memory.load_history(event.chat_id)
+        hist = memory.load_history(scope_id)
         if hist:
             context = (hist + "\n\n" + context).strip()
-        mem = memory.relevant_facts(question)
+        mem = memory.relevant_facts(question, scope_id=scope_id)
 
-        # Web search dispatch
+        # جستجوی وب (مسیر مستقیم، سریع و با خروجی جمینای — مستقل از ایجنت کند)
         if _is_web_question(question):
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
-            raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem)
+            raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem, chat_id=scope_id)
             answer = agent.sanitize_tainted_output(raw_answer)
             await _stage(status, "📝 دارم جواب می‌دم...")
             if _is_long_or_code(answer):
@@ -1970,17 +2251,17 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, answer, link_preview=False)
             return
 
-        # Direct conversational query response
+        # سوال ساده/گفتگویی (بدون ابزار) → پاسخ مستقیم و سریع با جمینای، بدون حلقه‌ی کند ایجنت
         if _is_simple_question(question):
             await _stage(status, "💭 دارم جواب می‌دم...")
-            answer = await asyncio.to_thread(ai.answer_quick, question, context, mem)
+            answer = await asyncio.to_thread(ai.answer_quick, question, context, mem, chat_id=scope_id)
             await _stage(status, "📝 دارم جواب می‌دم...")
             if _is_long_or_code(answer):
                 await _send_as_md(event, status, answer)
             else:
                 await _safe_edit_or_send(event, status, answer)
-            memory.remember_exchange(event.chat_id, question, answer)
-            asyncio.create_task(_trigger_learn(question, answer))
+            memory.remember_exchange(scope_id, question, answer)
+            asyncio.create_task(_trigger_learn(question, answer, scope_id, event.chat_id))
             return
 
         await _stage(status, "🤔 دارم فکر می‌کنم...")
@@ -1991,8 +2272,8 @@ async def on_outgoing(event):
         if answer.startswith("__VOICE_SENT__:"):
             real_text = answer.replace("__VOICE_SENT__:", "").strip()
             if not is_tainted:
-                memory.remember_exchange(event.chat_id, question, real_text)
-                asyncio.create_task(_trigger_learn(question, real_text))
+                memory.remember_exchange(scope_id, question, real_text)
+                asyncio.create_task(_trigger_learn(question, real_text, scope_id, event.chat_id))
             return
 
         if answer.startswith("__DRAFT_SENT__:") or answer in ("__ROAST_SENT__", "__MEME_SENT__"):
@@ -2030,8 +2311,8 @@ async def on_outgoing(event):
                     except Exception:
                         pass
                 if not is_tainted:
-                    memory.remember_exchange(event.chat_id, question, voice_text)
-                    asyncio.create_task(_trigger_learn(question, voice_text))
+                    memory.remember_exchange(scope_id, question, voice_text)
+                    asyncio.create_task(_trigger_learn(question, voice_text, scope_id, event.chat_id))
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
@@ -2041,8 +2322,8 @@ async def on_outgoing(event):
         else:
             await _safe_edit_or_send(event, status, answer, link_preview=lp)
         if not is_tainted:
-            memory.remember_exchange(event.chat_id, question, answer)
-            asyncio.create_task(_trigger_learn(question, answer))
+            memory.remember_exchange(scope_id, question, answer)
+            asyncio.create_task(_trigger_learn(question, answer, scope_id, event.chat_id))
     except Exception as e:
         log.error("Error in on_outgoing: %s", type(e).__name__, exc_info=True)
         try:
@@ -2225,6 +2506,12 @@ async def on_incoming_pm(event):
         context = await get_context(event)
         mem = ""  # حافظه‌ی صاحب اکانت به دیگران نشان داده نمی‌شود
 
+        # استخراج و غنی‌سازی متن ریپلای برای کاربران مجاز در صورت درخواست خلاصه‌سازی
+        reply_info = await get_reply_info(event, client)
+        if _is_summary_request(question) and reply_info and reply_info.get("has_reply") and reply_info.get("text"):
+            r_author = reply_info.get("author_name") or "کاربر"
+            question = f"لطفاً متن پیام زیر از {r_author} را با دقت و شیوایی به زبان فارسی خلاصه کن:\n\n«{reply_info['text']}»"
+
         await _stage(status, "🤔 دارم فکر می‌کنم...")
         answer = await agent.run_agent(question, context, mem, event, client, status, is_owner=False, sender_name=s_name)
 
@@ -2299,6 +2586,9 @@ async def main():
     await asyncio.to_thread(_purge_downloads)
     me = await client.get_me()
     reactions.set_owner_id(me.id)
+    memory.set_owner_id(me.id)
+    global _owner_id
+    _owner_id = me.id
     print(f"[+] Capri v{config.VERSION} - Successfully logged in as: {me.first_name} (@{me.username})", flush=True)
     print(f"[*] Assistant name: '{config.ASSISTANT_NAME}'", flush=True)
     print(f"[*] Capri is listening. Trigger keyword: '{config.ASSISTANT_NAMES[0]}'", flush=True)
