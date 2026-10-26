@@ -1,5 +1,5 @@
 @echo off
-title Capri Telegram AI Userbot v2.0.0
+title Capri Telegram AI Userbot v2.2.0
 
 REM Change to directory of this script
 cd /d "%~dp0"
@@ -47,7 +47,7 @@ echo [OK] Dependencies installed successfully.
 :MENU
 cls
 echo ==============================================================================
-echo             CAPRI TELEGRAM AI USERBOT [v2.0.0] - LAUNCHER
+echo             CAPRI TELEGRAM AI USERBOT [v2.2.0] - LAUNCHER
 echo ==============================================================================
 echo.
 echo Available Options:
@@ -149,7 +149,7 @@ goto MENU
 :RUN_BOT
 cls
 echo ==============================================================================
-echo [*] Starting Capri Telegram AI Userbot [v2.0.0]...
+echo [*] Starting Capri Telegram AI Userbot [v2.2.0]...
 echo [*] Press Ctrl+C at any time in this window to stop the bot.
 echo ==============================================================================
 echo.

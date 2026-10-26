@@ -3,7 +3,7 @@ import uuid
 
 from dotenv import load_dotenv
 
-VERSION = "2.0.0"
+VERSION = "2.2.0"
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
