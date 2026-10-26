@@ -61,27 +61,27 @@ CATEGORIES = {
 }
 
 SMART_PICKS = {
-    "reasoning": ("xkiro", "openai/gpt-6.1-sol"),
+    "reasoning": ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
     "code": ("xkiro", "mistralai/codestral-2508"),
-    "speed": ("anyapi", "google/gemini-3.6-flash"),
+    "speed": ("anyapi", "google/gemini-2.5-flash-lite"),
     "vision": ("openrouter", "nvidia/nemotron-3.5-super-vl:free"),
-    "general": ("xkiro", "openai/gpt-5.6-sol"),
+    "general": ("xkiro", "mistralai/ministral-14b"),
 }
 
 CAT_REASON = {
-    "reasoning": "چون قدرتمندترین مدل استدلال پرچمدار در کاتالوگ است",
-    "code": "چون برای برنامه‌نویسی و حل پیشرفته کدهای ایجنت بهینه‌سازی شده",
-    "speed": "چون گزینه فوق‌سریع و پایدار با کانتکست عظیم است",
+    "reasoning": "چون غول ۵۵۰ میلیارد پارامتری و قدرتمندترین مدل استدلال رایگان است",
+    "code": "چون برای برنامه‌نویسی و حل پیشرفته کدهای ایجنت بهینه‌سازی شده (رایگان در XKIRO)",
+    "speed": "چون سبک‌ترین و پرسرعت‌ترین مدل پایدار با تاخیر نزدیک به صفر است",
     "vision": "چون چندوجهی تخصصی تحلیل تصویر و اسناد است",
-    "general": "چون متوازن‌ترین پرچمدار عمومی برای انواع مکالمات است",
+    "general": "چون متوازن‌ترین و سریع‌ترین مدل پرچمدار برای انواع مکالمات است",
 }
 
 
 def service_name(code: str) -> str:
     return {
-        "xkiro": "XKIRO (۹۹ مدل)",
+        "xkiro": "XKIRO (۹۷ مدل)",
         "bai": "B.AI (۶۲ مدل)",
-        "anyapi": "AnyAPI (۷۰ مدل)",
+        "anyapi": "AnyAPI (۷ مدل فعال)",
         "openrouter": "OpenRouter (رایگان)",
         "groq": "Groq (فوق‌سریع)",
         "hooshia": "هوشیا (بومی فارسی)",
@@ -132,9 +132,9 @@ def _detect_service(t: str):
         return "xkiro"
     if any(s in t for s in ("bai", "بای", "بی ای", "بی‌ای")):
         return "bai"
-    if any(s in t for s in ("anyapi", "انی", "انی ای پی آی", "انی‌پی‌آی", "انی پی آی")):
+    if any(s in t for s in ("anyapi", "انی", "انو", "انی ای پی آی", "انی‌پی‌آی", "انی پی آی", "any")):
         return "anyapi"
-    if any(s in t for s in ("openrouter", "اوپن روتر", "اوپنروتر", "اوپن راتر", "اوپنراتر")):
+    if any(s in t for s in ("openrouter", "اوپن روتر", "اوپنروتر", "اوپن راتر", "اوپنراتر", "اوپن")):
         return "openrouter"
     if any(s in t for s in ("groq", "گروک", "گروق")):
         return "groq"
@@ -146,19 +146,19 @@ def _detect_service(t: str):
 
 
 def _list_intent(t: str) -> bool:
-    return any(w in t for w in ("نشون", "نمایش", "بیار", "لیست", "چی داری", "چی دارید", "نشان", "بده", "کاتالوگ", "فهرست"))
+    return any(w in t for w in (
+        "نشون", "نمایش", "بیار", "لیست", "چی داری", "چی دارید", "نشان", "بده", "مدلارو بده", "مدلا رو بده",
+        "کاتالوگ", "فهرست", "مدلا", "مدل ها", "مدلها", "چه مدلایی", "کدوم مدلا", "چه مدلهایی", "فایل مدلا"
+    ))
 
 
 def _match_model_in_service(srv: str, subtext: str):
-    """جستجوی منعطف یک مدل درون یک سرویس خاص."""
     lst = ALL_SERVICES.get(srv, [])
     st = subtext.strip().lower()
     if not st:
         return None
-    # ۱. جستجو بر اساس UID
     if st in UID_MAP and UID_MAP[st][0] == srv:
         return UID_MAP[st][1]
-    # ۲. جستجو بر اساس شناسه یا نام
     for item in lst:
         if item["id"].lower() == st or item.get("uid", "").lower() == st:
             return item["id"]
@@ -174,7 +174,6 @@ def _find_model(text: str):
 
     lt = clean_text.lower()
 
-    # بررسی مستقیم UID مانند k5, b12, a2, o1, g1, h2, i1
     m_uid = re.search(r"\b([kbaoghie][0-9]{1,3})\b", lt)
     if m_uid:
         uid_cand = m_uid.group(1)
@@ -182,7 +181,6 @@ def _find_model(text: str):
             srv, mid, _ = UID_MAP[uid_cand]
             return srv, mid
 
-    # جستجوی فرمت vendor/model
     m_id = re.search(r"\b([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-\.:]+)\b", clean_text)
     if m_id:
         cand_id = m_id.group(1).lower()
@@ -191,7 +189,6 @@ def _find_model(text: str):
                 if e["id"].lower() == cand_id:
                     return srv, e["id"]
 
-    # کلمات کلیدی هوشیا
     if any(k in lt for k in ("hooshia", "هوشیا", "glm")):
         if "4.7" in lt:
             return "hooshia", "GLM-4.7-Flash"
@@ -199,7 +196,6 @@ def _find_model(text: str):
             return "hooshia", "GLM-4.6V-Flash"
         return "hooshia", "GLM-4.5-Flash"
 
-    # تطبیق نام مدل در کل سرویس‌ها
     nt = _norm(clean_text)
     SHORTCUTS = [
         ("qwen", "groq", "qwen/qwen3.8-27b"),
@@ -225,6 +221,9 @@ def parse_request(text: str):
 
     t = no_urls.lower()
 
+    if any(k in t for k in ("فایل مدلا", "فایل مدلها", "کاتالوگ مدلا", "دانلود مدلا", "مدلز md", "models.md")):
+        return {"action": "doc"}
+
     if ("برگردون" in t or "برگردان" in t or "قبلی" in t) and ("مدل" in t or "model" in t):
         return {"action": "restore"}
 
@@ -246,28 +245,32 @@ def parse_request(text: str):
             srv, mid, _ = UID_MAP[uid_cand]
             return {"action": "select", "service": srv, "model": mid, "uid": uid_cand}
 
+    # اگر کاربر درخواست لیست/نمایش مدل‌ها را داده باشد
+    if _list_intent(t):
+        if any(w in t for w in ("مدلارو بده", "مدلا رو بده", "مدلا", "مدل ها", "مدلها", "چه مدلایی", "کدوم مدلا", "لیست مدلا", "لیست مدلها", "کاتالوگ")):
+            return {"action": "list", "service": service}
+        if service:
+            return {"action": "list", "service": service}
+
     # اگر کاربر نام سرویس را گفته باشد (مثلا: کاپری مدل کیرو / کاپری مدل بای / کاپری مدل انی / کاپری مدل اوپن روتر)
     if service:
-        # استخراج متن باقی‌مانده پس از نام سرویس
-        sub = re.sub(r".*?\b(کیرو|خیرو|xkiro|بای|بی ای|بی‌ای|bai|انی|anyapi|اوپن روتر|اوپنروتر|openrouter|گروک|groq|هوشیا|hooshia|اینسپشن|inception)\b", "", t).strip()
-        # اگر کاربر فقط گفته «کاپری مدل کیرو» یا شبیه آن (بدون درخواست لیست)
-        if not _list_intent(t):
-            if sub:
-                matched_mid = _match_model_in_service(service, sub)
-                if matched_mid:
-                    return {"action": "select", "service": service, "model": matched_mid}
-            # انتخاب مدل پرچمدار پیش‌فرض سرویس
-            defaults = {
-                "xkiro": provider_xkiro.DEFAULT_MODEL,
-                "bai": provider_bai.DEFAULT_MODEL,
-                "anyapi": provider_anyapi.DEFAULT_MODEL,
-                "openrouter": provider_openrouter.DEFAULT_MODEL,
-                "groq": "qwen/qwen3.8-27b",
-                "hooshia": "GLM-4.5-Flash",
-                "inception": "mercury-3",
-            }
-            if service in defaults:
-                return {"action": "select", "service": service, "model": defaults[service]}
+        sub = re.sub(r".*?\b(کیرو|خیرو|xkiro|بای|بی ای|بی‌ای|bai|انی|انو|anyapi|اوپن روتر|اوپنروتر|openrouter|گروک|groq|هوشیا|hooshia|اینسپشن|inception)\b", "", t).strip()
+        if sub:
+            matched_mid = _match_model_in_service(service, sub)
+            if matched_mid:
+                return {"action": "select", "service": service, "model": matched_mid}
+        # انتخاب مدل پرچمدار پیش‌فرض سرویس
+        defaults = {
+            "xkiro": provider_xkiro.DEFAULT_MODEL,
+            "bai": provider_bai.DEFAULT_MODEL,
+            "anyapi": provider_anyapi.DEFAULT_MODEL,
+            "openrouter": provider_openrouter.DEFAULT_MODEL,
+            "groq": "qwen/qwen3.8-27b",
+            "hooshia": "GLM-4.5-Flash",
+            "inception": "mercury-3",
+        }
+        if service in defaults:
+            return {"action": "select", "service": service, "model": defaults[service]}
 
     if model_intent:
         if "کدنویسی" in t or "برنامه نویسی" in t or "کد " in t or "coding" in t:
@@ -284,10 +287,5 @@ def parse_request(text: str):
         words_count = len(no_urls.split())
         if model_intent or words_count <= 4:
             return {"action": "select", "service": hit[0], "model": hit[1]}
-
-    if service and _list_intent(t):
-        return {"action": "list", "service": service}
-    if _list_intent(t) and ("مدل" in t or "model" in t):
-        return {"action": "list", "service": None}
 
     return None

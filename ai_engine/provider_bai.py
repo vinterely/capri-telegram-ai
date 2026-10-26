@@ -1,6 +1,6 @@
 """سرویس و فراخوانی مدل‌های ارائه‌دهنده B.AI.
 
-شامل ۶۲ مدل با پیشوند شناسه یکتای b1 تا b62.
+شامل ۶۲ مدل رسمی B.AI با شناسه‌های دقیق سرور و پیشوند شناسه یکتای b1 تا b62.
 """
 
 from core import config
@@ -10,503 +10,503 @@ log = logger.get_logger(__name__)
 
 BASE_URL = "https://api.b.ai/v1"
 CHAT_ENDPOINT = f"{BASE_URL}/chat/completions"
-DEFAULT_MODEL = "GPT-6.1 Sol"
+DEFAULT_MODEL = "minimax-m3.1-flash"
 
 MODELS = [
     {
         "uid": "b1",
-        "id": "MiniMax-M3.1-Flash",
-        "name": "MiniMax-M3.1-Flash",
-        "desc": "مدل MiniMax-M3.1-Flash از B.AI (رسمی)",
+        "id": "minimax-m3.1-flash",
+        "name": "Minimax M3.1 Flash",
+        "desc": "مدل Minimax M3.1 Flash از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b2",
-        "id": "MiniMax-M3",
-        "name": "MiniMax-M3",
-        "desc": "مدل MiniMax-M3 از B.AI (رسمی)",
+        "id": "minimax-m3",
+        "name": "Minimax M3",
+        "desc": "مدل Minimax M3 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b3",
-        "id": "MiniMax-M2.7",
-        "name": "MiniMax-M2.7",
-        "desc": "مدل MiniMax-M2.7 از B.AI (رسمی)",
+        "id": "minimax-m2.7",
+        "name": "Minimax M2.7",
+        "desc": "مدل Minimax M2.7 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b4",
-        "id": "jev-1.13.0",
-        "name": "Jev 1.13.0",
-        "desc": "مدل Jev 1.13.0 از B.AI (رسمی)",
+        "id": "glm-5.1",
+        "name": "Glm 5.1",
+        "desc": "مدل Glm 5.1 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b5",
-        "id": "jev-latest",
-        "name": "Jev-Latest",
-        "desc": "مدل Jev-Latest از B.AI (رسمی)",
+        "id": "glm-5.2",
+        "name": "Glm 5.2",
+        "desc": "مدل Glm 5.2 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b6",
-        "id": "DeepSeek-V4.1-Flash",
-        "name": "DeepSeek-V4.1-Flash",
-        "desc": "مدل DeepSeek-V4.1-Flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "gpt-6.1-sol",
+        "name": "Gpt 6.1 Sol",
+        "desc": "مدل Gpt 6.1 Sol از B.AI",
+        "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b7",
-        "id": "DeepSeek-V4-Pro",
-        "name": "DeepSeek-V4-Pro",
-        "desc": "مدل DeepSeek-V4-Pro از B.AI (رسمی)",
+        "id": "gpt-6-astra",
+        "name": "Gpt 6 Astra",
+        "desc": "مدل Gpt 6 Astra از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b8",
-        "id": "Hy4-preview",
-        "name": "Hy4-preview",
-        "desc": "مدل Hy4-preview از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b9",
-        "id": "Hy3",
-        "name": "Hy3",
-        "desc": "مدل Hy3 از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b10",
-        "id": "MiMo-V2.6-Pro",
-        "name": "MiMo-V2.6-Pro",
-        "desc": "مدل MiMo-V2.6-Pro از B.AI (رسمی)",
+        "id": "gpt-6-sol",
+        "name": "Gpt 6 Sol",
+        "desc": "مدل Gpt 6 Sol از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
+        "uid": "b9",
+        "id": "gpt-6-luna",
+        "name": "Gpt 6 Luna",
+        "desc": "مدل Gpt 6 Luna از B.AI",
+        "cat": "reasoning",
+        "ctx": "128K+"
+    },
+    {
+        "uid": "b10",
+        "id": "gpt-5.6-sol",
+        "name": "Gpt 5.6 Sol",
+        "desc": "مدل Gpt 5.6 Sol از B.AI",
+        "cat": "general",
+        "ctx": "128K+"
+    },
+    {
         "uid": "b11",
-        "id": "MiMo-V2.6-Flash",
-        "name": "MiMo-V2.6-Flash",
-        "desc": "مدل MiMo-V2.6-Flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "gpt-5.6-terra",
+        "name": "Gpt 5.6 Terra",
+        "desc": "مدل Gpt 5.6 Terra از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b12",
-        "id": "Z.ai",
-        "name": "GLM-5.3-Flash",
-        "desc": "مدل GLM-5.3-Flash از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b13",
-        "id": "GLM-5.3-FlashX",
-        "name": "GLM-5.3-FlashX",
-        "desc": "مدل GLM-5.3-FlashX از B.AI (رسمی)",
+        "id": "gpt-5.6-luna",
+        "name": "Gpt 5.6 Luna",
+        "desc": "مدل Gpt 5.6 Luna از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
-        "uid": "b14",
-        "id": "GLM-5.3",
-        "name": "GLM-5.3",
-        "desc": "مدل GLM-5.3 از B.AI (رسمی)",
+        "uid": "b13",
+        "id": "gpt-5.5",
+        "name": "Gpt 5.5",
+        "desc": "مدل Gpt 5.5 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
+        "uid": "b14",
+        "id": "gpt-5.5-instant",
+        "name": "Gpt 5.5 Instant",
+        "desc": "مدل Gpt 5.5 Instant از B.AI",
+        "cat": "speed",
+        "ctx": "128K+"
+    },
+    {
         "uid": "b15",
-        "id": "GLM-5.2",
-        "name": "GLM-5.2",
-        "desc": "مدل GLM-5.2 از B.AI (رسمی)",
+        "id": "gpt-5.4",
+        "name": "Gpt 5.4",
+        "desc": "مدل Gpt 5.4 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b16",
-        "id": "GLM-5.1",
-        "name": "GLM-5.1",
-        "desc": "مدل GLM-5.1 از B.AI (رسمی)",
+        "id": "gpt-5.2",
+        "name": "Gpt 5.2",
+        "desc": "مدل Gpt 5.2 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b17",
-        "id": "Qwen3.8-Flash",
-        "name": "Qwen3.8-Flash",
-        "desc": "مدل Qwen3.8-Flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "gpt-5.4-pro",
+        "name": "Gpt 5.4 Pro",
+        "desc": "مدل Gpt 5.4 Pro از B.AI",
+        "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b18",
-        "id": "Qwen3.8-Max",
-        "name": "Qwen3.8-Max",
-        "desc": "مدل Qwen3.8-Max از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gpt-5.4-mini",
+        "name": "Gpt 5.4 Mini",
+        "desc": "مدل Gpt 5.4 Mini از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b19",
-        "id": "Qwen3.8-27B",
-        "name": "Qwen3.8-27B",
-        "desc": "مدل Qwen3.8-27B از B.AI (رسمی)",
-        "cat": "general",
+        "id": "gpt-5-mini",
+        "name": "Gpt 5 Mini",
+        "desc": "مدل Gpt 5 Mini از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b20",
-        "id": "Kimi K3.1 Pro",
-        "name": "Kimi K3.1 Pro",
-        "desc": "مدل Kimi K3.1 Pro از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gpt-5.4-nano",
+        "name": "Gpt 5.4 Nano",
+        "desc": "مدل Gpt 5.4 Nano از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b21",
-        "id": "Kimi K3.1 Pro Highspeed",
-        "name": "Kimi K3.1 Pro Highspeed",
-        "desc": "مدل Kimi K3.1 Pro Highspeed از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gpt-5-nano",
+        "name": "Gpt 5 Nano",
+        "desc": "مدل Gpt 5 Nano از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b22",
-        "id": "Kimi K3",
-        "name": "Kimi K3",
-        "desc": "مدل Kimi K3 از B.AI (رسمی)",
-        "cat": "general",
+        "id": "gpt-image-2",
+        "name": "Gpt Image 2",
+        "desc": "مدل Gpt Image 2 از B.AI",
+        "cat": "vision",
         "ctx": "128K+"
     },
     {
         "uid": "b23",
-        "id": "Kimi K2.8 Preview",
-        "name": "Kimi K2.8 Preview",
-        "desc": "مدل Kimi K2.8 Preview از B.AI (رسمی)",
-        "cat": "general",
+        "id": "claude-opus-5.5",
+        "name": "Claude Opus 5.5",
+        "desc": "مدل Claude Opus 5.5 از B.AI",
+        "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b24",
-        "id": "Kimi-K2.6",
-        "name": "Kimi-K2.6",
-        "desc": "مدل Kimi-K2.6 از B.AI (رسمی)",
+        "id": "claude-sonnet-5.5",
+        "name": "Claude Sonnet 5.5",
+        "desc": "مدل Claude Sonnet 5.5 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b25",
-        "id": "Claude Opus 5.5",
-        "name": "Claude Opus 5.5",
-        "desc": "مدل Claude Opus 5.5 از B.AI (رسمی)",
-        "cat": "reasoning",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b26",
-        "id": "Claude Sonnet 5.5",
-        "name": "Claude Sonnet 5.5",
-        "desc": "مدل Claude Sonnet 5.5 از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b27",
-        "id": "Claude Haiku 5.5",
+        "id": "claude-haiku-5.5",
         "name": "Claude Haiku 5.5",
-        "desc": "مدل Claude Haiku 5.5 از B.AI (رسمی)",
+        "desc": "مدل Claude Haiku 5.5 از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
-        "uid": "b28",
-        "id": "Claude Fable 5.1",
+        "uid": "b26",
+        "id": "claude-fable-5.1",
         "name": "Claude Fable 5.1",
-        "desc": "مدل Claude Fable 5.1 از B.AI (رسمی)",
+        "desc": "مدل Claude Fable 5.1 از B.AI",
+        "cat": "reasoning",
+        "ctx": "128K+"
+    },
+    {
+        "uid": "b27",
+        "id": "claude-fable-5",
+        "name": "Claude Fable 5",
+        "desc": "مدل Claude Fable 5 از B.AI",
+        "cat": "reasoning",
+        "ctx": "128K+"
+    },
+    {
+        "uid": "b28",
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "desc": "مدل Claude Opus 5 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b29",
-        "id": "Claude Fable 5",
-        "name": "Claude Fable 5",
-        "desc": "مدل Claude Fable 5 از B.AI (رسمی)",
+        "id": "claude-opus-4.8",
+        "name": "Claude Opus 4.8",
+        "desc": "مدل Claude Opus 4.8 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b30",
-        "id": "Claude Opus 5",
-        "name": "Claude Opus 5",
-        "desc": "مدل Claude Opus 5 از B.AI (رسمی)",
+        "id": "claude-opus-4.7",
+        "name": "Claude Opus 4.7",
+        "desc": "مدل Claude Opus 4.7 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b31",
-        "id": "Claude Opus 4.8",
-        "name": "Claude Opus 4.8",
-        "desc": "مدل Claude Opus 4.8 از B.AI (رسمی)",
+        "id": "claude-opus-4.6",
+        "name": "Claude Opus 4.6",
+        "desc": "مدل Claude Opus 4.6 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b32",
-        "id": "Claude Opus 4.7",
-        "name": "Claude Opus 4.7",
-        "desc": "مدل Claude Opus 4.7 از B.AI (رسمی)",
+        "id": "claude-opus-4.5",
+        "name": "Claude Opus 4.5",
+        "desc": "مدل Claude Opus 4.5 از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b33",
-        "id": "Claude Opus 4.6",
-        "name": "Claude Opus 4.6",
-        "desc": "مدل Claude Opus 4.6 از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "desc": "مدل Claude Sonnet 5 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b34",
-        "id": "Claude Opus 4.5",
-        "name": "Claude Opus 4.5",
-        "desc": "مدل Claude Opus 4.5 از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "claude-sonnet-4.6",
+        "name": "Claude Sonnet 4.6",
+        "desc": "مدل Claude Sonnet 4.6 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b35",
-        "id": "Claude Sonnet 5",
-        "name": "Claude Sonnet 5",
-        "desc": "مدل Claude Sonnet 5 از B.AI (رسمی)",
+        "id": "claude-sonnet-4.5",
+        "name": "Claude Sonnet 4.5",
+        "desc": "مدل Claude Sonnet 4.5 از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b36",
-        "id": "Claude Sonnet 4.6",
-        "name": "Claude Sonnet 4.6",
-        "desc": "مدل Claude Sonnet 4.6 از B.AI (رسمی)",
-        "cat": "general",
+        "id": "claude-haiku-4.5",
+        "name": "Claude Haiku 4.5",
+        "desc": "مدل Claude Haiku 4.5 از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b37",
-        "id": "Claude Sonnet 4.5",
-        "name": "Claude Sonnet 4.5",
-        "desc": "مدل Claude Sonnet 4.5 از B.AI (رسمی)",
-        "cat": "general",
+        "id": "gemini-4-argon",
+        "name": "Gemini 4 Argon",
+        "desc": "مدل Gemini 4 Argon از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b38",
-        "id": "Claude Haiku 4.5",
-        "name": "Claude Haiku 4.5",
-        "desc": "مدل Claude Haiku 4.5 از B.AI (رسمی)",
+        "id": "gemini-3.8-flash",
+        "name": "Gemini 3.8 Flash",
+        "desc": "مدل Gemini 3.8 Flash از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b39",
-        "id": "GPT-6.1 Sol",
-        "name": "GPT-6.1 Sol",
-        "desc": "مدل GPT-6.1 Sol از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gemini-3.6-flash",
+        "name": "Gemini 3.6 Flash",
+        "desc": "مدل Gemini 3.6 Flash از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b40",
-        "id": "GPT-6 Astra",
-        "name": "GPT-6 Astra",
-        "desc": "مدل GPT-6 Astra از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gemini-3.5-flash-lite",
+        "name": "Gemini 3.5 Flash Lite",
+        "desc": "مدل Gemini 3.5 Flash Lite از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b41",
-        "id": "GPT-6 Sol",
-        "name": "GPT-6 Sol",
-        "desc": "مدل GPT-6 Sol از B.AI (رسمی)",
-        "cat": "reasoning",
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "desc": "مدل Gemini 3.5 Flash از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b42",
-        "id": "GPT-6 Luna",
-        "name": "GPT-6 Luna",
-        "desc": "مدل GPT-6 Luna از B.AI (رسمی)",
+        "id": "gemini-3.1-pro",
+        "name": "Gemini 3.1 Pro",
+        "desc": "مدل Gemini 3.1 Pro از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b43",
-        "id": "GPT-5.6 Sol",
-        "name": "GPT-5.6 Sol",
-        "desc": "مدل GPT-5.6 Sol از B.AI (رسمی)",
-        "cat": "general",
+        "id": "gemini-3-flash",
+        "name": "Gemini 3 Flash",
+        "desc": "مدل Gemini 3 Flash از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b44",
-        "id": "GPT-5.6 Terra",
-        "name": "GPT-5.6 Terra",
-        "desc": "مدل GPT-5.6 Terra از B.AI (رسمی)",
+        "id": "hy4-preview",
+        "name": "Hy4 Preview",
+        "desc": "مدل Hy4 Preview از B.AI",
         "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b45",
-        "id": "GPT-5.6 Luna",
-        "name": "GPT-5.6 Luna",
-        "desc": "مدل GPT-5.6 Luna از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "mimo-v2.6-pro",
+        "name": "Mimo V2.6 Pro",
+        "desc": "مدل Mimo V2.6 Pro از B.AI",
+        "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b46",
-        "id": "GPT-5.5",
-        "name": "GPT-5.5",
-        "desc": "مدل GPT-5.5 از B.AI (رسمی)",
-        "cat": "general",
+        "id": "glm-5.3-flash",
+        "name": "Glm 5.3 Flash",
+        "desc": "مدل Glm 5.3 Flash از B.AI",
+        "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b47",
-        "id": "GPT-5.5-Instant",
-        "name": "GPT-5.5-Instant",
-        "desc": "مدل GPT-5.5-Instant از B.AI (رسمی)",
+        "id": "glm-5.3-flashx",
+        "name": "Glm 5.3 Flashx",
+        "desc": "مدل Glm 5.3 Flashx از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b48",
-        "id": "GPT-5.4",
-        "name": "GPT-5.4",
-        "desc": "مدل GPT-5.4 از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b49",
-        "id": "GPT-5.2",
-        "name": "GPT-5.2",
-        "desc": "مدل GPT-5.2 از B.AI (رسمی)",
-        "cat": "general",
-        "ctx": "128K+"
-    },
-    {
-        "uid": "b50",
-        "id": "GPT-5.4 Pro",
-        "name": "GPT-5.4 Pro",
-        "desc": "مدل GPT-5.4 Pro از B.AI (رسمی)",
+        "id": "kimi-k3.1-pro",
+        "name": "Kimi K3.1 Pro",
+        "desc": "مدل Kimi K3.1 Pro از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
+        "uid": "b49",
+        "id": "kimi-k3.1-pro-highspeed",
+        "name": "Kimi K3.1 Pro Highspeed",
+        "desc": "مدل Kimi K3.1 Pro Highspeed از B.AI",
+        "cat": "reasoning",
+        "ctx": "128K+"
+    },
+    {
+        "uid": "b50",
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "desc": "مدل Kimi K3 از B.AI",
+        "cat": "general",
+        "ctx": "128K+"
+    },
+    {
         "uid": "b51",
-        "id": "GPT-5.4 mini",
-        "name": "GPT-5.4 mini",
-        "desc": "مدل GPT-5.4 mini از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "glm-5.3",
+        "name": "Glm 5.3",
+        "desc": "مدل Glm 5.3 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b52",
-        "id": "GPT-5 mini",
-        "name": "GPT-5 mini",
-        "desc": "مدل GPT-5 mini از B.AI (رسمی)",
+        "id": "mimo-v2.6-flash",
+        "name": "Mimo V2.6 Flash",
+        "desc": "مدل Mimo V2.6 Flash از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b53",
-        "id": "GPT-5.4 nano",
-        "name": "GPT-5.4 nano",
-        "desc": "مدل GPT-5.4 nano از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "kimi-k2.8-preview",
+        "name": "Kimi K2.8 Preview",
+        "desc": "مدل Kimi K2.8 Preview از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b54",
-        "id": "GPT-5 nano",
-        "name": "GPT-5 nano",
-        "desc": "مدل GPT-5 nano از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "desc": "مدل Kimi K2.6 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b55",
-        "id": "GPT Image 2",
-        "name": "GPT Image 2",
-        "desc": "مدل GPT Image 2 از B.AI (رسمی)",
-        "cat": "vision",
+        "id": "hy3",
+        "name": "Hy3",
+        "desc": "مدل Hy3 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b56",
-        "id": "Gemini 4 Argon",
-        "name": "Gemini 4 Argon",
-        "desc": "مدل Gemini 4 Argon از B.AI (رسمی)",
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "desc": "مدل Qwen3.8 Flash از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b57",
-        "id": "Gemini 3.8 flash",
-        "name": "Gemini 3.8 flash",
-        "desc": "مدل Gemini 3.8 flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "desc": "مدل Qwen3.8 Max از B.AI",
+        "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b58",
-        "id": "Gemini 3.6 flash",
-        "name": "Gemini 3.6 flash",
-        "desc": "مدل Gemini 3.6 flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "qwen3.8-27b",
+        "name": "Qwen3.8 27B",
+        "desc": "مدل Qwen3.8 27B از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b59",
-        "id": "Gemini 3.5 flash-lite",
-        "name": "Gemini 3.5 flash-lite",
-        "desc": "مدل Gemini 3.5 flash-lite از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "jev-1.13.0",
+        "name": "Jev 1.13.0",
+        "desc": "مدل Jev 1.13.0 از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     },
     {
         "uid": "b60",
-        "id": "Gemini 3.5 flash",
-        "name": "Gemini 3.5 flash",
-        "desc": "مدل Gemini 3.5 flash از B.AI (رسمی)",
+        "id": "deepseek-v4.1-flash",
+        "name": "Deepseek V4.1 Flash",
+        "desc": "مدل Deepseek V4.1 Flash از B.AI",
         "cat": "speed",
         "ctx": "128K+"
     },
     {
         "uid": "b61",
-        "id": "Gemini 3.1 Pro",
-        "name": "Gemini 3.1 Pro",
-        "desc": "مدل Gemini 3.1 Pro از B.AI (رسمی)",
+        "id": "deepseek-v4-pro",
+        "name": "Deepseek V4 Pro",
+        "desc": "مدل Deepseek V4 Pro از B.AI",
         "cat": "reasoning",
         "ctx": "128K+"
     },
     {
         "uid": "b62",
-        "id": "Gemini 3 Flash",
-        "name": "Gemini 3 Flash",
-        "desc": "مدل Gemini 3 Flash از B.AI (رسمی)",
-        "cat": "speed",
+        "id": "jev-latest",
+        "name": "Jev Latest",
+        "desc": "مدل Jev Latest از B.AI",
+        "cat": "general",
         "ctx": "128K+"
     }
 ]

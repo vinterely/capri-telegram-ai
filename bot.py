@@ -1193,15 +1193,63 @@ MODEL_PAGE_SIZE = 6
 
 
 def _model_code(service: str) -> str:
-    return {"groq": "g", "openrouter": "o", "inception": "i"}.get(service, "o")
+    return {
+        "xkiro": "k",
+        "bai": "b",
+        "anyapi": "a",
+        "openrouter": "o",
+        "groq": "g",
+        "hooshia": "h",
+        "inception": "i",
+    }.get(service, "o")
 
 
 def _code_service(code: str) -> str:
-    return {"g": "groq", "o": "openrouter", "i": "inception"}.get(code, "openrouter")
+    return {
+        "k": "xkiro",
+        "b": "bai",
+        "a": "anyapi",
+        "o": "openrouter",
+        "g": "groq",
+        "h": "hooshia",
+        "i": "inception",
+    }.get(code, "openrouter")
 
 
 def _service_models(service: str):
-    return {"groq": models.GROQ, "openrouter": models.OPENROUTER, "inception": models.INCEPTION}.get(service, models.OPENROUTER)
+    return {
+        "xkiro": models.XKIRO,
+        "bai": models.BAI,
+        "anyapi": models.ANYAPI,
+        "openrouter": models.OPENROUTER,
+        "groq": models.GROQ,
+        "hooshia": models.HOOSHIA,
+        "inception": models.INCEPTION,
+    }.get(service, models.OPENROUTER)
+
+
+def _render_provider_menu():
+    text = (
+        "🤖 **کاتالوگ جامع مدل‌های هوش مصنوعی کاپری**\n\n"
+        "برای مشاهده و انتخاب مدل‌ها، ارائه‌دهنده مورد نظر خود را انتخاب کنید:\n"
+        "• **⚡ XKIRO (k):** ۹۷ مدل جهانی (پرچمداران و مدل‌های رایگان)\n"
+        "• **🤖 B.AI (b):** ۶۲ مدل رسمی قدرتمند\n"
+        "• **🌐 AnyAPI (a):** مدل‌های پرسرعت جمینای و نموترون\n"
+        "• **🆓 OpenRouter (o):** ۱۵ مدل متن‌باز کاملاً رایگان\n"
+        "• **⚡ Groq (g):** ۳ مدل فوق‌سریع پردازش ابزار و استدلال\n"
+        "• **🇮🇷 هوشیا (h):** ۳ مدل بومی فارسی GLM بدون فیلتر\n"
+        "• **🚀 Inception (i):** مدل پرسرعت Mercury 3\n\n"
+        "💡 **سوییچ فوری با شناسه یکتا:** کافیست UID مدل را بفرستید (مثلاً `k1`، `a1`، `o3`، `b1` یا `h1`).\n"
+        "برای دریافت فایل کامل کاتالوگ، روی دکمه فایل متنی بزنید."
+    )
+    buttons = [
+        [Button.inline("⚡ XKIRO (k)", b"ls:k"), Button.inline("🤖 B.AI (b)", b"ls:b")],
+        [Button.inline("🌐 AnyAPI (a)", b"ls:a"), Button.inline("🆓 OpenRouter (o)", b"ls:o")],
+        [Button.inline("⚡ Groq (g)", b"ls:g"), Button.inline("🇮🇷 هوشیا (h)", b"ls:h"), Button.inline("🚀 Inception (i)", b"ls:i")],
+        [Button.inline("📄 دانلود فایل کامل MODELS.md", b"ls:doc")],
+        [Button.inline("✖️ بستن منو", b"x")],
+    ]
+    return text, buttons
 
 
 def _render_model_list(service: str, page: int):
@@ -1211,18 +1259,24 @@ def _render_model_list(service: str, page: int):
     start = (page - 1) * MODEL_PAGE_SIZE
     chunk = lst[start:start + MODEL_PAGE_SIZE]
     code = _model_code(service)
-    lines = [f"📦 مدل‌های {models.service_name(service)} (صفحه {page}/{total})"]
+    lines = [f"📦 **مدل‌های {models.service_name(service)}** (صفحه {page} از {total})\n"]
     for i, e in enumerate(chunk):
-        lines.append(f"\n{start + i + 1}. **{e['name']}** — {models.CATEGORIES.get(e['cat'], '')}")
-        lines.append(f"   `{e['id']}`")
-        lines.append(f"   _{e['desc']}_")
-    lines.append("\nبرای انتخاب، روی اسم مدل بزن.")
+        uid_tag = f"[`{e['uid']}`] " if e.get("uid") else ""
+        lines.append(f"{start + i + 1}. {uid_tag}**{e['name']}** — {models.CATEGORIES.get(e.get('cat', ''), 'عمومی')}")
+        lines.append(f"   شناسه: `{e['id']}`")
+        if e.get("desc"):
+            lines.append(f"   _{e['desc']}_")
+        lines.append("")
+    lines.append("👇 برای فعال‌سازی فوری، روی دکمه مدل بزنید یا شناسه‌اش را بنویسید:")
     buttons = []
     for i, e in enumerate(chunk):
-        buttons.append([Button.inline(f"{start + i + 1}. {e['name']}", f"pk:{code}:{start + i}".encode())])
+        uid_str = f"[{e['uid']}] " if e.get("uid") else ""
+        display_btn = f"{uid_str}{e['name']}"[:30]
+        buttons.append([Button.inline(display_btn, f"pk:{code}:{start + i}".encode())])
     nav = []
     if page > 1:
         nav.append(Button.inline("⬅️ قبلی", f"pg:{code}:{page - 1}".encode()))
+    nav.append(Button.inline("🔙 منوی ارائه‌دهندگان", b"ls:menu"))
     if page < total:
         nav.append(Button.inline("بعدی ➡️", f"pg:{code}:{page + 1}".encode()))
     if nav:
@@ -1443,15 +1497,22 @@ async def _handle_model_request(event, status, req):
         else:
             await status.edit("مدل قبلی ثبت نشده که برگردم بهش.")
         return
+    if action == "doc":
+        import os
+        if os.path.exists("MODELS.md"):
+            await client.send_file(event.chat_id, "MODELS.md", caption="📄 **کاتالوگ جامع ۲۵۳ مدل هوش مصنوعی کاپری** به همراه شناسه‌های یکتا (UID) و دستورات سوییچ فوری.")
+            await status.delete()
+        else:
+            await status.edit("❌ فایل کاتالوگ MODELS.md یافت نشد.")
+        return
     if action == "list":
         service = req.get("service")
         if service:
             text, buttons = _render_model_list(service, 1)
             await status.edit(text, buttons=buttons)
         else:
-            await status.edit(
-                "📦 مدل‌های کدوم سرویس رو نشون بدم؟",
-                buttons=[[Button.inline("Groq", b"ls:g"), Button.inline("OpenRouter", b"ls:o"), Button.inline("Inception (Mercury 3)", b"ls:i")]])
+            text, buttons = _render_provider_menu()
+            await status.edit(text, buttons=buttons)
         return
     if action == "smart":
         entry = models.smart_pick(req.get("cat", "general"))
@@ -1520,6 +1581,17 @@ async def on_model_callback(event):
         if s == "x":
             await event.answer()
             await event.delete()
+            return
+        if s == "ls:menu":
+            await event.answer()
+            text, buttons = _render_provider_menu()
+            await event.edit(text, buttons=buttons)
+            return
+        if s == "ls:doc":
+            await event.answer("در حال ارسال فایل...")
+            import os
+            if os.path.exists("MODELS.md"):
+                await client.send_file(event.chat_id, "MODELS.md", caption="📄 **کاتالوگ جامع ۲۵۳ مدل هوش مصنوعی کاپری** به همراه شناسه‌های یکتا (UID) و دستورات سوییچ فوری.")
             return
         if s.startswith("ls:"):
             await event.answer()
