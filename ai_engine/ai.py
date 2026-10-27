@@ -66,18 +66,35 @@ def _get_client(api_key=None):
     return client
 
 
-def _today() -> str:
-    from datetime import datetime, timedelta, timezone
+def _local_tz():
+    from datetime import timedelta, timezone
     try:
         from zoneinfo import ZoneInfo
-        tehran = ZoneInfo("Asia/Tehran")
+        return ZoneInfo(config.TIMEZONE)
     except Exception:
         # ایران از ۲۰۲۲ ساعت تابستانی را حذف کرد؛ +۳:۳۰ ثابت برای میزبان‌های بدون tzdata
-        tehran = timezone(timedelta(hours=3, minutes=30))
-    now_tehran = datetime.now(tehran)
+        return timezone(timedelta(hours=3, minutes=30))
+
+
+def _today() -> str:
+    from datetime import datetime
+    now_tehran = datetime.now(_local_tz())
     jalali = jdatetime.datetime.fromgregorian(datetime=now_tehran)
     weekdays = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
     return f"{jalali.strftime('%Y/%m/%d')} ({weekdays[jalali.weekday()]})"
+
+
+def _now_context() -> str:
+    """Full date + weekday + time + validated timezone for dynamic context injection."""
+    from datetime import datetime
+    now = datetime.now(_local_tz())
+    jalali = jdatetime.datetime.fromgregorian(datetime=now)
+    weekdays = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
+    offset = now.strftime("%z")
+    return (
+        f"{jalali.strftime('%Y/%m/%d')} ({weekdays[jalali.weekday()]}) — "
+        f"ساعت {now.strftime('%H:%M:%S')} — منطقه زمانی {config.TIMEZONE} (UTC{offset})"
+    )
 
 
 def _generate(model: str, prompt: str, client) -> str:
@@ -111,7 +128,15 @@ def _gemini(prompt: str):
 
 
 def _build_system(context: str, memory: str, web: bool, question: str = "", chat_id: Optional[str] = None) -> str:
-    parts = [SYSTEM_PROMPT, f"امروز: {_today()}"]
+    parts = [
+        SYSTEM_PROMPT,
+        f"🗓️ تاریخ و زمان فعلی (معتبر):\n{_now_context()}",
+        (
+            "⚠️ تازگی دانش: دانش داخلی تو ممکن است قدیمی باشد. تاریخ جاری فقط زمان «الان» را می‌گوید، نه به‌روز بودن دانش تو. "
+            "اگر پاسخ سؤال به اطلاعات جدید، وضعیت فعلی یا تغییرات اخیر وابسته است، اطلاعات را در اینترنت جستجو کن و صرفاً به حافظه/دانش قدیمی اکتفا نکن. "
+            "اگر نتوانستی اطلاعات تازه را تأیید کنی، محدودیتت را صادقانه بگو و اطلاعات قدیمی یا حدس را به‌عنوان واقعیت فعلی ارائه نده."
+        ),
+    ]
     if question or context:
         try:
             from core import social_dynamics

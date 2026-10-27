@@ -25,7 +25,8 @@ class TestSevenSecurityHardens(unittest.IsolatedAsyncioTestCase):
         event.reply = AsyncMock()
         event.get_sender = AsyncMock(return_value=MagicMock(first_name="غریبه", bot=False))
 
-        with patch("core.access.is_allowed", return_value=False):
+        with patch("core.access.is_allowed", return_value=False), \
+             patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         event.reply.assert_not_called()
@@ -39,7 +40,8 @@ class TestSevenSecurityHardens(unittest.IsolatedAsyncioTestCase):
         event.reply = AsyncMock()
         event.get_sender = AsyncMock(return_value=MagicMock(first_name="ربات مخرب", bot=True))
 
-        with patch("core.access.is_allowed", return_value=True):
+        with patch("core.access.is_allowed", return_value=True), \
+             patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         event.reply.assert_not_called()
@@ -78,7 +80,8 @@ class TestSevenSecurityHardens(unittest.IsolatedAsyncioTestCase):
 
         with patch("core.access.is_allowed", return_value=True), \
              patch("core.access.is_denied", return_value=False), \
-             patch("bot._stranger_rate_ok", return_value=True):
+             patch("bot._stranger_rate_ok", return_value=True), \
+             patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         event.reply.assert_called_once()

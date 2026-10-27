@@ -2,7 +2,7 @@
 Smart Do Not Disturb (DND) & Reminders System
 Features:
 1. Intelligent DND modes: Sleep, Class, Meeting, Work, Workout.
-2. Contextual auto-replies in DMs and group mentions.
+2. Contextual AI-generated away replies in DMs and group mentions (one per sender ID per DND session).
 3. Real-time logging of auto-replies to Saved Messages.
 4. Urgency detection for emergency escalation.
 5. Scheduled reminders and notifications in Saved Messages.
@@ -27,10 +27,10 @@ log = logging.getLogger("dnd")
 DND_FILE = os.path.join(config.BASE_DIR, "dnd.json")
 REMINDERS_FILE = os.path.join(config.BASE_DIR, "reminders.json")
 
-# Auto-reply cooldown (15 mins per user/chat) to prevent spam
-COOLDOWN_SEC = 900
-_pv_cooldown: Dict[int, float] = {}
-_group_cooldown: Dict[Tuple[int, int], float] = {}
+# Maximum timeout for generating AI away replies; falls back to static template on timeout
+_AI_REPLY_TIMEOUT = 25
+# Cap on stored replied sender IDs per DND session to bound state growth
+_MAX_REPLIED_IDS = 500
 _my_id: Optional[int] = None
 
 _PERSIAN_DIGITS = {
@@ -52,17 +52,6 @@ def normalize_digits(s: str) -> str:
     for p, a in _PERSIAN_DIGITS.items():
         s = s.replace(p, a)
     return s
-
-
-def _prune_cooldowns() -> None:
-    """Prune expired cooldown timestamps to prevent memory growth."""
-    now = time.time()
-    stale_pv = [k for k, ts in _pv_cooldown.items() if now - ts > 3600]
-    for k in stale_pv:
-        _pv_cooldown.pop(k, None)
-    stale_grp = [k for k, ts in _group_cooldown.items() if now - ts > 3600]
-    for k in stale_grp:
-        _group_cooldown.pop(k, None)
 
 
 async def _get_my_id(client) -> Optional[int]:
@@ -118,10 +107,79 @@ def activate_dnd(reason: str, until_ts: Optional[float] = None, until_str: str =
         "until_ts": until_ts,
         "until_str": until_str or ("تا اطلاع بعدی" if not until_ts else ""),
         "started_at": time.time(),
-        "replies_count": 0
+        "replies_count": 0,
+        "replied_ids": [],
+        "missed": [],
+        "missed_since": time.time(),
     }
     save_dnd(info)
     return info
+
+
+def _already_replied(dnd_data: dict, sender_id) -> bool:
+    try:
+        sid = int(sender_id)
+    except (TypeError, ValueError):
+        return False
+    return sid in {int(x) for x in (dnd_data.get("replied_ids") or []) if str(x).lstrip("-").isdigit()}
+
+
+def _mark_replied(sender_id) -> None:
+    """Mark sender ID as replied to avoid duplicate replies during current DND session."""
+    try:
+        sid = int(sender_id)
+    except (TypeError, ValueError):
+        return
+    d = load_dnd()
+    ids = [int(x) for x in (d.get("replied_ids") or []) if str(x).lstrip("-").isdigit()]
+    if sid in ids:
+        return
+    ids.append(sid)
+    if len(ids) > _MAX_REPLIED_IDS:
+        ids = ids[-_MAX_REPLIED_IDS:]
+    d["replied_ids"] = ids
+    d["replies_count"] = int(d.get("replies_count", 0)) + 1
+    save_dnd(d)
+
+
+_MISSED_MAX = 50
+
+
+def record_missed(sender_name: str, source: str, text: str) -> None:
+    """Record missed messages during owner absence (bounded queue) for return briefing."""
+    d = load_dnd()
+    missed = d.get("missed") or []
+    snippet = (text or "").strip()
+    if len(snippet) > 300:
+        snippet = snippet[:300] + "..."
+    missed.append({
+        "name": (sender_name or "مخاطب").strip(),
+        "source": (source or "پیوی").strip(),
+        "text": snippet,
+        "ts": time.time(),
+    })
+    if len(missed) > _MISSED_MAX:
+        missed = missed[-_MISSED_MAX:]
+    d["missed"] = missed
+    save_dnd(d)
+
+
+def get_missed_summary() -> str:
+    """Format a summary briefing of missed messages for the returning owner."""
+    d = load_dnd()
+    missed = d.get("missed") or []
+    since = d.get("missed_since")
+    if not missed:
+        return "📭 در دورهٔ غیبت اخیر پیام جدیدی ثبت نشده (یا خلاصه پاک شده)."
+    lines = [f"📥 **پیام‌های رسیده در نبود تو** ({len(missed)} مورد):\n"]
+    for i, m in enumerate(missed[-20:], 1):
+        name = m.get("name", "مخاطب")
+        source = m.get("source", "")
+        text = m.get("text", "") or "[پیام بدون متن]"
+        lines.append(f"{i}. 👤 {name} — {source}\n   «{text}»")
+    if len(missed) > 20:
+        lines.append(f"\n_... و {len(missed) - 20} پیام دیگر_")
+    return "\n".join(lines)
 
 
 def deactivate_dnd() -> None:
@@ -181,7 +239,7 @@ def clear_all_reminders() -> int:
 
 def extract_dnd_reason(text: str) -> str:
     t = text.lower()
-    if any(w in t for w in ("خواب", "بخوابم", "می‌خوابم", "میخوابم", "استراحت")):
+    if any(w in t for w in ("خواب", "بدرگیرم", "می‌درگیرم", "میدرگیرم", "استراحت")):
         return "خواب و استراحت"
     if any(w in t for w in ("کلاس", "دانشگاه", "مدرسه")):
         return "کلاس و دانشگاه"
@@ -209,6 +267,18 @@ def parse_time_expression(text: str, now: Optional[datetime] = None) -> Tuple[Op
         return now + timedelta(minutes=30), "۳۰ دقیقه دیگر"
     if "یک ربع" in t:
         return now + timedelta(minutes=15), "۱۵ دقیقه دیگر"
+
+    # پایان روز/شب برای اعلام غیبت‌های مبهم مثل «امشب نیستم» یا «امروز در دسترس نیستم»
+    if "امشب" in t or "تا شب" in t:
+        target = now.replace(hour=23, minute=59, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target, "امشب"
+    if "امروز" in t and any(w in t for w in ("نیستم", "در دسترس", "درگیر", "مشغول", "نمیتونم", "نمی")):
+        target = now.replace(hour=23, minute=59, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target, "امروز"
 
     # Offset hours / minutes
     m_h = re.search(r'(\d+)\s*(?:ساعت|ساعته|h)\b', t)
@@ -307,24 +377,70 @@ def is_urgent_message(text: str) -> bool:
 
 def generate_pv_reply(owner_name: str, reason: str, until_str: str, is_urgent: bool = False) -> str:
     owner = owner_name or "من"
-    until_part = f" و تا {until_str}" if until_str else ""
+    status = f"{owner} تا {until_str} درگیر {reason} هست" if until_str else f"{owner} الان درگیر {reason} هست"
 
     if is_urgent:
         return (
-            f"سلام! {owner} الان درگیر {reason} هست{until_part} و دستش بنده. "
-            f"پیام شما چون به نظر فوری و مهم می‌آید، در صفحه پیام‌های ذخیره‌شده‌اش نشانه‌گذاری شد تا به محض اینکه فرصت کرد سریعاً ببیند. 🙏"
+            f"سلام! {status} و فعلاً دسترسی به گوشی نداره. "
+            f"پیامت رو دیدم و چون فوری به نظر می‌رسه، جزو پیام‌های مهم علامت زدم که اول از همه سراغش بره. 🙏"
         )
 
     return (
-        f"سلام! {owner} الان درگیر {reason} هست{until_part} و سرش شلوغه. "
-        f"پیامتون رو دیدم، به محض اینکه آزاد بشه حتماً جوابتون رو میده 🙂"
+        f"سلام! {status} و فعلاً نمی‌تونه جواب بده. "
+        f"پیامت رسید؛ به‌محض آزاد شدن حتماً جوابت رو می‌ده 🙏"
     )
 
 
 def generate_group_reply(owner_name: str, reason: str, until_str: str) -> str:
     owner = owner_name or "من"
-    until_part = f" تا {until_str}" if until_str else ""
-    return f"{owner} الان{until_part} درگیر {reason} هست، آزاد بشه پیامت رو چک می‌کنه ✌️"
+    status = f"{owner} تا {until_str} درگیر {reason} هست" if until_str else f"{owner} الان درگیر {reason} هست"
+    return f"{status} و فعلاً دسترسی نداره؛ پیامت رو دیده و به‌محض برگشتن جواب می‌ده 🙏"
+
+
+async def generate_ai_reply(
+    kind: str,
+    owner_name: str,
+    reason: str,
+    until_str: str,
+    sender_name: str,
+    incoming: str,
+    is_urgent: bool = False,
+) -> str:
+    """پاسخ غیبت را با هوش مصنوعی و متناسب با پیام طرف می‌سازد؛ در خطا رشتهٔ خالی برمی‌گردد."""
+    from ai_engine import ai
+
+    owner = owner_name or "من"
+    place = "گروه" if kind == "group" else "چت خصوصی"
+    until_line = f"تا {until_str}" if until_str else "تا اطلاع بعدی"
+    text = (incoming or "").strip()
+    if len(text) > 600:
+        text = text[:600] + "…"
+
+    urgent_line = (
+        "پیام او فوری/اضطراری به نظر می‌رسد؛ در پاسخ اشاره کن که در اولویت قرار گرفت.\n"
+        if is_urgent else ""
+    )
+    prompt = (
+        f"تو دستیار شخصی «{owner}» هستی و از طرف او به پیام {sender_name} در {place} جواب می‌دهی.\n"
+        f"وضعیت: {owner} {until_line} درگیر «{reason}» است و الان نمی‌تواند پاسخ بدهد.\n"
+        f"متن پیام او: «{text or '[بدون متن / رسانه]'}»\n"
+        f"{urgent_line}\n"
+        "یک پاسخ کوتاه (حداکثر دو جمله)، محترمانه، صمیمی و طبیعی به فارسی بنویس که:\n"
+        "- روشن بگوید الان نیست و دلیلش همین است، و کی برمی‌گردد.\n"
+        "- اگر پیامش کار مهمی دارد، بگوید دیده شد و به‌محض برگشتن بررسی می‌شود.\n"
+        "- از عبارت‌های کلیشه‌ای مثل «مشغولم» یا «سرش شلوغه» استفاده نکن.\n"
+        "- هیچ قول، زمان یا جزئیاتی که در این متن نیست از خودت نساز.\n"
+        "- فقط متن نهایی پیام را بده؛ بدون مقدمه و بدون گیومه."
+    )
+    try:
+        reply = await asyncio.wait_for(asyncio.to_thread(ai.ask_direct, prompt), timeout=_AI_REPLY_TIMEOUT)
+    except Exception as e:
+        log.warning(f"AI DND reply generation failed: {type(e).__name__}")
+        return ""
+    reply = (reply or "").strip().strip('"“”«»').strip()
+    if len(reply) > 400:
+        reply = reply[:400].rsplit(" ", 1)[0] + "…"
+    return reply
 
 
 # -----------------------------------------------------------------------------
@@ -368,8 +484,21 @@ async def report_dnd_action(
 # هندلرهای ورودی (پیوی و گروه)
 # -----------------------------------------------------------------------------
 
+async def _sender_info(event) -> Optional[Tuple[str, str]]:
+    """نام و یوزرنیم فرستنده؛ برای بات‌ها None برمی‌گرداند."""
+    try:
+        sender = await event.get_sender()
+    except Exception:
+        sender = None
+    if sender is not None and getattr(sender, "bot", False):
+        return None
+    name = (getattr(sender, "first_name", "") or "مخاطب").strip()
+    username = getattr(sender, "username", "") or ""
+    return name, username
+
+
 async def handle_incoming_pv(event, client) -> bool:
-    """پاسخ خودکار در چت خصوصی هنگام فعال بودن DND."""
+    """پاسخ خودکار هوشمند در چت خصوصی هنگام فعال بودن DND (یک‌بار به هر شناسه در هر دوره)."""
     if not is_dnd_active():
         return False
 
@@ -381,37 +510,31 @@ async def handle_incoming_pv(event, client) -> bool:
     if my_id and sender_id == my_id:
         return False
 
-    now = time.time()
-    if now - _pv_cooldown.get(sender_id, 0) < COOLDOWN_SEC:
-        return True  # کول‌داون فعال است
-
-    try:
-        sender = await event.get_sender()
-    except Exception:
-        sender = None
-
-    if sender is not None and getattr(sender, "bot", False):
+    info = await _sender_info(event)
+    if info is None:
         return False
-
-    s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
-    s_username = getattr(sender, "username", "") or ""
+    s_name, s_username = info
     incoming = (event.raw_text or "").strip()
 
     dnd_data = get_dnd_info()
     reason = dnd_data.get("reason", "مشغله")
     until_str = dnd_data.get("until_str", "")
-    urgent = is_urgent_message(incoming)
 
-    reply_text = generate_pv_reply(config.OWNER_NAME, reason, until_str, is_urgent=urgent)
+    # پیام‌ها حتی از فرستنده‌هایی که قبلاً پاسخ گرفته‌اند در خلاصهٔ غیبت ثبت می‌شوند
+    record_missed(s_name, "چت خصوصی (PV)", incoming)
+    if _already_replied(dnd_data, sender_id):
+        return True
+
+    urgent = is_urgent_message(incoming)
+    reply_text = await generate_ai_reply(
+        "pv", config.OWNER_NAME, reason, until_str, s_name, incoming, is_urgent=urgent
+    )
+    if not reply_text:
+        reply_text = generate_pv_reply(config.OWNER_NAME, reason, until_str, is_urgent=urgent)
 
     try:
         await event.reply(reply_text)
-        _pv_cooldown[sender_id] = now
-        if len(_pv_cooldown) > 200:
-            _prune_cooldowns()
-
-        dnd_data["replies_count"] = dnd_data.get("replies_count", 0) + 1
-        save_dnd(dnd_data)
+        _mark_replied(sender_id)
 
         # ارسال گزارش به سیود مسیجز
         await report_dnd_action(
@@ -430,7 +553,7 @@ async def handle_incoming_pv(event, client) -> bool:
 
 
 async def handle_incoming_group_mention(event, client) -> bool:
-    """پاسخ خودکار در گروه هنگام تگ شدن مالک در زمان فعال بودن DND."""
+    """پاسخ خودکار هوشمند در گروه هنگام تگ شدن مالک (یک‌بار به هر شناسه در هر دوره)."""
     if not is_dnd_active():
         return False
 
@@ -456,21 +579,10 @@ async def handle_incoming_group_mention(event, client) -> bool:
     if not chat_id:
         return False
 
-    now = time.time()
-    key = (chat_id, sender_id)
-    if now - _group_cooldown.get(key, 0) < COOLDOWN_SEC:
-        return True
-
-    try:
-        sender = await event.get_sender()
-    except Exception:
-        sender = None
-
-    if sender is not None and getattr(sender, "bot", False):
+    info = await _sender_info(event)
+    if info is None:
         return False
-
-    s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
-    s_username = getattr(sender, "username", "") or ""
+    s_name, s_username = info
     incoming = (event.raw_text or "").strip()
 
     try:
@@ -482,18 +594,22 @@ async def handle_incoming_group_mention(event, client) -> bool:
     dnd_data = get_dnd_info()
     reason = dnd_data.get("reason", "مشغله")
     until_str = dnd_data.get("until_str", "")
-    urgent = is_urgent_message(incoming)
 
-    reply_text = generate_group_reply(config.OWNER_NAME, reason, until_str)
+    # پیام‌ها حتی از فرستنده‌هایی که قبلاً پاسخ گرفته‌اند در خلاصهٔ غیبت ثبت می‌شوند
+    record_missed(s_name, f"گروه «{group_title}»", incoming)
+    if _already_replied(dnd_data, sender_id):
+        return True
+
+    urgent = is_urgent_message(incoming)
+    reply_text = await generate_ai_reply(
+        "group", config.OWNER_NAME, reason, until_str, s_name, incoming, is_urgent=urgent
+    )
+    if not reply_text:
+        reply_text = generate_group_reply(config.OWNER_NAME, reason, until_str)
 
     try:
         await event.reply(reply_text)
-        _group_cooldown[key] = now
-        if len(_group_cooldown) > 200:
-            _prune_cooldowns()
-
-        dnd_data["replies_count"] = dnd_data.get("replies_count", 0) + 1
-        save_dnd(dnd_data)
+        _mark_replied(sender_id)
 
         # ارسال گزارش به سیود مسیجز
         await report_dnd_action(
@@ -524,8 +640,77 @@ def is_dnd_deactivate_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return any(w in t for w in (
         "بیدار شدم", "آزاد شدم", "سرشلوغ رو خاموش", "سرشلوغ رو ببند",
-        "dnd رو خاموش", "dnd رو ببند", "خاموش کردن dnd", "سرشلوغی رو بردار", "پایان dnd"
+        "dnd رو خاموش", "dnd رو ببند", "خاموش کردن dnd", "سرشلوغی رو بردار", "پایان dnd",
+        "برگشتم", "برگشتیم", "اومدم", "آمدم", "رسیدم", "حالم بهتره", "خوابم تموم شد"
     ))
+
+
+_ABSENCE_STRONG = (
+    "برمیگردم", "بر میگردم", "برمیگردیم", "در دسترس نیستم", "در دسترس نباشم", "دسترس نیستم",
+    "فعلا نیستم", "فعلاً نیستم", "غایبم", "غیبم", "غیبتم", "میرم بیرون",
+    "نمیتونم پیام", "نمی تونم پیام", "نمی‌تونم پیام",
+)
+_ABSENCE_WEAK = ("نیستم", "نیستیم", "نمیتونم", "نمی تونم", "نمی‌تونم")
+_ABSENCE_CONTEXT = (
+    "ساعت", "امشب", "امروز", "چند ساعت", "دقیقه", "الان", "الآن", "فعلا", "فعلاً",
+    "مدیریت", "جواب", "پیام", "در دسترس", "نیم ساعت", "یک ربع", "برگرد",
+)
+# رد قطعی (سوال یا زمان گذشته): صرف‌نظر از جای آن در جمله، اعلام غیبت شمرده نمی‌شود.
+_ABSENCE_HARD_NEGATE = (
+    "؟", "?", "چرا", "چطور", "چطوری", "چگونه", "آیا",
+    "دیروز", "پارسال", "دیشب", "نبودم", "نبودند",
+)
+# رد شرطی/نقل‌قول: فقط وقتی قبل از خودِ اعلام غیبت بیاید.
+# مثال: «اگه امروز نیستم» رد می‌شود ولی «فعلاً نیستم؛ اگه کسی پیام داد مدیریت کن» فعال می‌شود.
+_ABSENCE_SOFT_NEGATE = (
+    "اگه", "اگر", "فرض کن", "مثلا", "مثلاً", "شاید",
+    "میگه", "میگفت", "بگه", "نقل قول", "چی میگه",
+)
+
+
+def _first_absence_marker_pos(t: str) -> Optional[int]:
+    """موقعیت نخستین نشانهٔ غیبت (قوی یا ضعیف) در متن؛ اگر نبود None."""
+    positions = [t.find(w) for w in _ABSENCE_STRONG + _ABSENCE_WEAK if w in t]
+    return min(positions) if positions else None
+
+
+def is_absence_activation(text: str) -> bool:
+    """تشخیص اعلام غیبت مالک به زبان طبیعی (من نیستم/برمیگردم/امشب نمیتونم...) بدون مثبت کاذب.
+
+    عبارت‌های قطعیِ اول‌شخص بلافاصله فعال می‌شوند؛ نشانه‌های ضعیف («نیستم»/«نمیتونم»)
+    فقط همراه با بافت زمان یا مدیریت پیام فعال می‌شوند تا جمله‌هایی مثل
+    «من طرفدار این نیستم» وضعیت را تغییر ندهند. سوال و زمان گذشته همیشه رد می‌شوند؛
+    فرض و نقل‌قول فقط وقتی رد می‌شوند که قبل از خود اعلام غیبت بیایند.
+    """
+    t = (text or "").strip().lower()
+    if not t or len(t) > 80:
+        return False
+
+    # سوال یا زمان گذشته: همیشه رد
+    if any(w in t for w in _ABSENCE_HARD_NEGATE):
+        return False
+
+    marker_pos = _first_absence_marker_pos(t)
+    if marker_pos is None:
+        return False
+
+    # «گفت» سوم‌شخص (نه «گفتم» اول‌شخص) پیش از اعلام غیبت → صحبت دربارهٔ دیگری است
+    m_quote = re.search(r"گفت(?!م)", t)
+    if m_quote and m_quote.start() < marker_pos:
+        return False
+
+    # فرض/شرط/نقل‌قول قبل از اعلام غیبت → اعلام واقعی نیست
+    for w in _ABSENCE_SOFT_NEGATE:
+        idx = t.find(w)
+        if idx != -1 and idx < marker_pos:
+            return False
+
+    if any(w in t for w in _ABSENCE_STRONG):
+        return True
+    has_weak = any(w in t for w in _ABSENCE_WEAK)
+    if not has_weak:
+        return False
+    return any(w in t for w in _ABSENCE_CONTEXT)
 
 
 def is_dnd_command(text: str) -> bool:
@@ -540,7 +725,7 @@ def is_dnd_command(text: str) -> bool:
         return False
 
     has_activity = any(w in t for w in (
-        "خوابم", "بخوابم", "می‌خوابم", "میخوابم", "استراحتم", "کلاسم", "سر کلاسم", "کلاس دارم",
+        "درگیرم", "بدرگیرم", "می‌درگیرم", "میدرگیرم", "استراحتم", "کلاسم", "سر کلاسم", "کلاس دارم",
         "دانشگاهم", "سر کارم", "کار دارم", "جلسه‌ام", "جلسه دارم", "درس دارم", "درس می‌خونم",
         "درس میخونم", "امتحان دارم", "باشگاهم", "بیرونم", "رانندگی‌ام", "مزاحم نشید", "مزاحمم نشید",
         "سرم شلوغه", "سرشلوغ", "dnd"
@@ -654,6 +839,15 @@ async def handle_owner_command(event, status, question: str) -> bool:
     q = (question or "").strip()
     q_low = q.lower()
 
+    # خلاصهٔ پیام‌های رسیده هنگام غیبت (برای بازبینی مالک)
+    if any(w in q_low for w in ("در نبودم", "وقتی نبودم", "خلاصه غیبت", "خلاصه غیبتم", "پیامای نبودم", "پیامهای نبودم", "نبودم چی شد", "چی شد وقتی")):
+        msg = get_missed_summary()
+        if status:
+            await status.edit(msg)
+        else:
+            await event.reply(msg)
+        return True
+
     # ۱. خاموش کردن DND
     if is_dnd_deactivate_command(q_low):
         dnd_info = get_dnd_info()
@@ -684,8 +878,8 @@ async def handle_owner_command(event, status, question: str) -> bool:
             await event.reply(res_str)
         return True
 
-    # ۳. فعال‌سازی DND
-    if is_dnd_command(q):
+    # ۳. فعال‌سازی DND (اعلام غیبت یا مشغله به زبان طبیعی)
+    if is_dnd_command(q) or is_absence_activation(q):
         target_dt, until_str = parse_time_expression(q)
         reason = extract_dnd_reason(q)
         until_ts = target_dt.timestamp() if target_dt else None
@@ -695,7 +889,7 @@ async def handle_owner_command(event, status, question: str) -> bool:
             f"🔕 **حالت سرشلوغ (DND) فعال شد.**\n\n"
             f"📌 **علت:** {reason}\n"
             f"⏳ **مدت اعتبار:** {until_str or 'تا اعلام پایان توسط شما'}\n"
-            f"💬 در این مدت پیام‌های پیوی و تگ‌های گروه به‌صورت محترمانه پاسخ داده می‌شوند و گزارش لحظه‌ای آن‌ها به همین صفحه (Saved Messages) ارسال خواهد شد."
+            f"💬 در این مدت پیام‌های پیوی و تگ‌های گروه با یک پاسخ محترمانه و طبیعی (یک‌بار به هر نفر) جواب داده می‌شوند و گزارش لحظه‌ای آن‌ها به همین صفحه (Saved Messages) ارسال خواهد شد."
         )
         if status:
             await status.edit(resp)

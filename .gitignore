@@ -11,6 +11,8 @@ scratch/
 downloads/*
 !downloads/.gitkeep
 settings.json
+home.json
+channel_summary.json
 cognitive_memory.json
 memory.json
 instance.id

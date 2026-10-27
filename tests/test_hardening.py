@@ -196,7 +196,7 @@ class TestNonOwnerSecurityAndCooldown(unittest.IsolatedAsyncioTestCase):
         # فرض کنیم ۱۰ ثانیه قبل درخواستی ثبت شده
         bot._stranger_last_request[uid] = time.time() - 10
 
-        with patch("core.access.is_denied", return_value=False),              patch("core.access.is_allowed", return_value=True),              patch("bot._stranger_rate_ok", return_value=True):
+        with patch("core.access.is_denied", return_value=False),              patch("core.access.is_allowed", return_value=True),              patch("bot._stranger_rate_ok", return_value=True),              patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         # اخطار ۳۰ ثانیه‌ای باید ارسال شده باشد
@@ -207,7 +207,7 @@ class TestNonOwnerSecurityAndCooldown(unittest.IsolatedAsyncioTestCase):
 
         # تلاش مجدد بلافاصله در حین کول‌داون -> نادیده گرفتن خاموش (بدون ریپلای مجدد)
         event.reply.reset_mock()
-        with patch("core.access.is_denied", return_value=False),              patch("core.access.is_allowed", return_value=True),              patch("bot._stranger_rate_ok", return_value=True):
+        with patch("core.access.is_denied", return_value=False),              patch("core.access.is_allowed", return_value=True),              patch("bot._stranger_rate_ok", return_value=True),              patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
         event.reply.assert_not_called()
 
@@ -229,7 +229,8 @@ class TestNonOwnerSecurityAndCooldown(unittest.IsolatedAsyncioTestCase):
         event.reply = AsyncMock()
         event.get_sender = AsyncMock(return_value=MagicMock(first_name="غریبه", bot=False))
 
-        with patch("core.access.is_allowed", return_value=False):
+        with patch("core.access.is_allowed", return_value=False), \
+             patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         event.reply.assert_not_called()
@@ -245,7 +246,8 @@ class TestNonOwnerSecurityAndCooldown(unittest.IsolatedAsyncioTestCase):
         bot_sender = MagicMock(first_name="تست بات", bot=True)
         event.get_sender = AsyncMock(return_value=bot_sender)
 
-        with patch("core.access.is_allowed", return_value=True):
+        with patch("core.access.is_allowed", return_value=True), \
+             patch("services.social.dnd.is_dnd_active", return_value=False):
             await bot.on_incoming_pm(event)
 
         event.reply.assert_not_called()

@@ -475,8 +475,6 @@ class TestDNDAndReminders(unittest.IsolatedAsyncioTestCase):
         self.orig_rem_file = dnd.REMINDERS_FILE
         dnd.DND_FILE = dnd.DND_FILE + ".test"
         dnd.REMINDERS_FILE = dnd.REMINDERS_FILE + ".test"
-        dnd._pv_cooldown.clear()
-        dnd._group_cooldown.clear()
         if os.path.exists(dnd.DND_FILE):
             os.remove(dnd.DND_FILE)
         if os.path.exists(dnd.REMINDERS_FILE):
@@ -524,7 +522,7 @@ class TestDNDAndReminders(unittest.IsolatedAsyncioTestCase):
         self.dnd.clear_all_reminders()
         self.assertEqual(len(self.dnd.load_reminders()), 0)
 
-    async def test_pv_auto_reply_and_report(self):
+    async def test_pv_auto_reply_uses_ai_and_reports(self):
         self.dnd.activate_dnd("کلاس دانشگاه", time.time() + 3600, "ساعت ۱۴")
         event = AsyncMock()
         event.sender_id = 999
@@ -537,19 +535,30 @@ class TestDNDAndReminders(unittest.IsolatedAsyncioTestCase):
         event.reply = AsyncMock()
 
         client = AsyncMock()
-        handled = await self.dnd.handle_incoming_pv(event, client)
+        ai_reply = "سلام علی جان! کاپری الان سر کلاس دانشگاهه و تا ساعت ۱۴ دسترسی نداره. پیامت رو می‌بینه و حتماً جواب می‌ده."
+        with patch("ai_engine.ai.ask_direct", return_value=ai_reply) as mock_ask:
+            handled = await self.dnd.handle_incoming_pv(event, client)
+
         self.assertTrue(handled)
-        event.reply.assert_called_once()
-        reply_arg = event.reply.call_args[0][0]
-        self.assertIn("کلاس دانشگاه", reply_arg)
+        event.reply.assert_called_once_with(ai_reply)
+        prompt = mock_ask.call_args[0][0]
+        self.assertIn("کلاس دانشگاه", prompt)
+        self.assertIn("علی", prompt)
+
+        info = self.dnd.get_dnd_info()
+        self.assertEqual(info["replies_count"], 1)
+        self.assertIn(999, info["replied_ids"])
+        self.assertEqual(len(info["missed"]), 1)
+
         client.send_message.assert_called_once()
         me_arg = client.send_message.call_args[0][0]
         report_text = client.send_message.call_args[0][1]
         self.assertEqual(me_arg, "me")
         self.assertIn("علی", report_text)
         self.assertIn("چت خصوصی", report_text)
+        self.assertIn(ai_reply, report_text)
 
-    async def test_group_auto_reply_and_report(self):
+    async def test_group_auto_reply_uses_ai_and_reports(self):
         self.dnd.activate_dnd("امتحان مدار", time.time() + 3600, "ساعت ۱۶")
         event = AsyncMock()
         event.chat_id = -100123456
@@ -572,15 +581,137 @@ class TestDNDAndReminders(unittest.IsolatedAsyncioTestCase):
         client = AsyncMock()
         client.get_me = AsyncMock(return_value=MagicMock(id=111))
 
-        handled = await self.dnd.handle_incoming_group_mention(event, client)
+        ai_reply = "سارا جان، کاپری تا ساعت ۱۶ سر امتحان مداره؛ پیامت رو دیده و بعد از تموم شدن امتحان جواب می‌ده."
+        with patch("ai_engine.ai.ask_direct", return_value=ai_reply) as mock_ask:
+            handled = await self.dnd.handle_incoming_group_mention(event, client)
+
         self.assertTrue(handled)
-        event.reply.assert_called_once()
-        group_reply_text = event.reply.call_args[0][0]
-        self.assertIn("امتحان مدار", group_reply_text)
+        event.reply.assert_called_once_with(ai_reply)
+        self.assertIn("امتحان مدار", mock_ask.call_args[0][0])
+
         client.send_message.assert_called_once()
         report = client.send_message.call_args[0][1]
         self.assertIn("گروه «گروه برنامه‌نویسی»", report)
         self.assertIn("سارا", report)
+
+    async def test_one_reply_per_sender_per_session(self):
+        self.dnd.activate_dnd("کلاس", time.time() + 3600, "ساعت ۱۲")
+        client = AsyncMock()
+
+        def _pv(text):
+            e = AsyncMock()
+            e.sender_id = 555
+            e.raw_text = text
+            sender = MagicMock(first_name="رضا", username="reza", bot=False)
+            e.get_sender = AsyncMock(return_value=sender)
+            e.reply = AsyncMock()
+            return e
+
+        first, second = _pv("سلام کجایی؟"), _pv("ببخشید کار مهمی داشتم")
+        with patch("ai_engine.ai.ask_direct", return_value="کاپری الان سر کلاسه و به‌زودی جواب می‌ده.") as mock_ask:
+            self.assertTrue(await self.dnd.handle_incoming_pv(first, client))
+            self.assertTrue(await self.dnd.handle_incoming_pv(second, client))
+
+        self.assertEqual(mock_ask.call_count, 1)
+        first.reply.assert_called_once()
+        second.reply.assert_not_called()
+
+        info = self.dnd.get_dnd_info()
+        self.assertEqual(info["replies_count"], 1)
+        self.assertEqual(len(info["missed"]), 2, "پیام تکراری هم باید در خلاصهٔ غیبت ثبت شود")
+
+        # شروع دورهٔ جدید DND باید شمارندهٔ شناسه‌ها را ریست کند
+        self.dnd.activate_dnd("خواب", time.time() + 3600, "ساعت ۲")
+        third = _pv("دوباره سلام")
+        with patch("ai_engine.ai.ask_direct", return_value="کاپری الان خوابه؛ صبح جوابت رو می‌ده."):
+            self.assertTrue(await self.dnd.handle_incoming_pv(third, client))
+        third.reply.assert_called_once()
+
+    async def test_once_per_id_shared_between_pv_and_group(self):
+        self.dnd.activate_dnd("جلسه کاری", time.time() + 3600, "ساعت ۱۰")
+        client = AsyncMock()
+        client.get_me = AsyncMock(return_value=MagicMock(id=111))
+
+        pv = AsyncMock()
+        pv.chat_id = 777
+        pv.sender_id = 777
+        pv.raw_text = "سلام، پیوی"
+        pv.get_sender = AsyncMock(return_value=MagicMock(first_name="مینا", username="mina", bot=False))
+        pv.reply = AsyncMock()
+
+        grp = AsyncMock()
+        grp.chat_id = -100999
+        grp.sender_id = 777
+        grp.mentioned = True
+        grp.reply_to_msg_id = None
+        grp.raw_text = "کاپری کجایی؟"
+        grp.get_sender = AsyncMock(return_value=MagicMock(first_name="مینا", username="mina", bot=False))
+        grp.get_chat = AsyncMock(return_value=MagicMock(title="گروه تست"))
+        grp.reply = AsyncMock()
+
+        with patch("ai_engine.ai.ask_direct", return_value="مینا جان، کاپری الان توی جلسه‌ست و بعدش جواب می‌ده."):
+            self.assertTrue(await self.dnd.handle_incoming_pv(pv, client))
+            self.assertTrue(await self.dnd.handle_incoming_group_mention(grp, client))
+
+        pv.reply.assert_called_once()
+        grp.reply.assert_not_called()
+
+    async def test_ai_failure_falls_back_to_template_without_busy_phrase(self):
+        self.dnd.activate_dnd("درس و امتحان", time.time() + 3600, "ساعت ۱۸")
+        event = AsyncMock()
+        event.sender_id = 321
+        event.raw_text = "سلام، هستی؟"
+        event.get_sender = AsyncMock(return_value=MagicMock(first_name="حسین", username="", bot=False))
+        event.reply = AsyncMock()
+
+        client = AsyncMock()
+        with patch("ai_engine.ai.ask_direct", side_effect=Exception("provider down")):
+            handled = await self.dnd.handle_incoming_pv(event, client)
+
+        self.assertTrue(handled)
+        event.reply.assert_called_once()
+        text = event.reply.call_args[0][0]
+        self.assertIn("درس و امتحان", text)
+        self.assertNotIn("مشغولم", text)
+        self.assertNotIn("سرش شلوغه", text)
+
+    async def test_bot_sender_gets_no_dnd_reply(self):
+        self.dnd.activate_dnd("خواب", time.time() + 3600, "ساعت ۸")
+        event = AsyncMock()
+        event.sender_id = 444
+        event.raw_text = "پیام ربات"
+        event.get_sender = AsyncMock(return_value=MagicMock(first_name="بات", bot=True))
+        event.reply = AsyncMock()
+
+        handled = await self.dnd.handle_incoming_pv(event, AsyncMock())
+        self.assertFalse(handled)
+        event.reply.assert_not_called()
+
+    async def test_bot_replies_to_stranger_during_dnd_before_access_gate(self):
+        self.dnd.activate_dnd("خواب", time.time() + 3600, "ساعت ۸")
+        event = MagicMock()
+        event.sender_id = 606
+        event.raw_text = "سلام، کجایی؟"
+        event.out = False
+        event.is_private = True
+        event.is_group = False
+        event.fwd_from = None
+        event.via_bot_id = None
+        event.via_bot = None
+        event.message = MagicMock(fwd_from=None, via_bot_id=None, via_bot=None)
+        event.get_sender = AsyncMock(return_value=MagicMock(first_name="غریبه", username="", bot=False))
+        event.reply = AsyncMock()
+
+        with patch.object(self.dnd, "_my_id", 111), \
+             patch("core.access.is_allowed", return_value=False), \
+             patch("core.access.is_denied", return_value=False), \
+             patch.object(bot.home, "is_home_chat", return_value=False), \
+             patch.object(bot.client, "send_message", new_callable=AsyncMock), \
+             patch("ai_engine.ai.ask_direct", return_value="کاپری الان خوابه؛ به‌محض بیدار شدن جوابت رو می‌ده."):
+            await bot.on_incoming_pm(event)
+
+        event.reply.assert_called_once()
+        self.assertIn("خواب", event.reply.call_args[0][0])
 
     def test_clean_reminder_text_preserves_prepositions(self):
         res = self.dnd.clean_reminder_text("کاپری ساعت ۱۰ یادم بنداز که به علی زنگ بزنم")

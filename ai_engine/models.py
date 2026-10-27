@@ -238,7 +238,9 @@ def parse_request(text: str):
     )
     model_intent = any(w in t for w in MODEL_TRIGGERS)
 
-    # Check direct UID match (e.g. k1, a5, b12, o3) with model switching intent guard
+    # بررسی مستقیم UID (مثال: k1, a5, کاپری مدل b12, برو رو o3)
+    # جهت پیشگیری قطعی از تداخل با لغات معمولی (مثلاً «کتاب b2» یا «ویتامین b1»)،
+    # فقط در صورت وجود قصد مدل یا کوتاه بودن کل پیام به اندازه ۱ الی ۲ کلمه معتبر است.
     m_uid = re.search(r"\b([kbaoghie][0-9]{1,3})\b", t)
     if m_uid:
         uid_cand = m_uid.group(1)
@@ -248,21 +250,21 @@ def parse_request(text: str):
             srv, mid, _ = UID_MAP[uid_cand]
             return {"action": "select", "service": srv, "model": mid, "uid": uid_cand}
 
-    # Model catalog listing intent
+    # اگر کاربر درخواست لیست/نمایش مدل‌ها را داده باشد
     if _list_intent(t):
         if any(w in t for w in ("مدلارو بده", "مدلا رو بده", "مدلا", "مدل ها", "مدلها", "چه مدلایی", "کدوم مدلا", "لیست مدلا", "لیست مدلها", "کاتالوگ")):
             return {"action": "list", "service": service}
         if service and model_intent:
             return {"action": "list", "service": service}
 
-    # Model selection via explicit service name with intent
+    # اگر کاربر قصد تغییر مدل داشته و نام سرویس را گفته باشد (مثلا: کاپری مدل کیرو / کاپری مدل بای / کاپری مدل انی / کاپری مدل اوپن روتر)
     if service and model_intent:
         sub = re.sub(r".*?\b(کیرو|خیرو|xkiro|بای|بی ای|بی‌ای|bai|انی|anyapi|اوپن روتر|اوپنروتر|openrouter|گروک|groq|هوشیا|hooshia|اینسپشن|inception)\b", "", t).strip()
         if sub:
             matched_mid = _match_model_in_service(service, sub)
             if matched_mid:
                 return {"action": "select", "service": service, "model": matched_mid}
-        # Select default flagship model of the provider
+        # انتخاب مدل پرچمدار پیش‌فرض سرویس
         defaults = {
             "xkiro": provider_xkiro.DEFAULT_MODEL,
             "bai": provider_bai.DEFAULT_MODEL,

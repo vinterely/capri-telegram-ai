@@ -9,9 +9,10 @@ import time
 from collections import deque
 from typing import Any, Optional
 
-from telethon import Button, TelegramClient, events, types
+from telethon import Button, TelegramClient, events, types, utils as tl_utils
 
 from core import access
+from core import ops
 from ai_engine import agent
 from ai_engine import ai
 from services.social import briefing
@@ -22,6 +23,9 @@ from services.media import fetch
 from services.telegram import folders
 from services.telegram import vault
 from services.telegram import reactions
+from services.telegram import home
+from services.telegram import cleaner
+from services.telegram import channel_summary
 from services.social import ghost
 from services.social import dnd
 from services.search import gsearch
@@ -86,6 +90,14 @@ class _BoundedIdSet:
 
     def __contains__(self, x) -> bool:
         return x in self._set
+
+    def pairs_for_chat(self, chat_id) -> set:
+        """Message IDs sent by the bot in a specific chat (matching (chat_id, msg_id) tuples)."""
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return set()
+        return {k[1] for k in self._set if isinstance(k, tuple) and len(k) == 2 and k[0] == cid}
 
 
 self_sent = _BoundedIdSet()
@@ -258,6 +270,40 @@ def strip_trigger(text: str) -> str:
     for p in _NAME_PATTERNS:
         t = p.sub(" ", t, count=1)
     return t.strip().strip("،,:.؟? ")
+
+
+_CANCEL_CORES = ("لغو", "کنسل", "کنصل", "بی‌خیال", "بیخیال", "بی خیال", "متوقف", "استپ", "توقف", "ول", "انصراف")
+_CANCEL_OBJECT_WORDS = ("این کار", "عملیات", "دانلود", "سرچ", "جستجو", "پردازش", "کار", "این")
+
+
+def is_cancel_command(text: str) -> bool:
+    """Detect true cancellation command (cancel, stop, drop) with high precision and zero false positives."""
+    t = _normalize_fa(text)
+    if not t or len(t) > 40:
+        return False
+    # حذف ضمایر مفعولی و حروف زائد برای رسیدن به هستهٔ فعل لغو
+    for w in _CANCEL_OBJECT_WORDS:
+        t = re.sub(r"(?:^| )" + re.escape(w) + r"(?: |$)", " ", t)
+    # حذف پسوندهای دستوری (کن/شو/ش/بده/بکن/بشه) به صورت تکراری تا رسیدن به ریشهٔ فعل
+    while True:
+        new_t = re.sub(r"(شو|کن|بشه|بکن|بده)\s*$", " ", t)
+        new_t = re.sub(r"ش\s*$", " ", new_t)
+        new_t = " ".join(new_t.split())
+        if new_t == t:
+            break
+        t = new_t
+    if not t:
+        return False
+    # هستهٔ لغو باید تقریباً کل پیام را تشکیل دهد (با یک قید/حرف اضافهٔ اختیاری)
+    for core in _CANCEL_CORES:
+        if t == core:
+            return True
+        if t.startswith(core + " ") or t.endswith(" " + core):
+            # جمله‌های طولانی غیرلغو (مثل «لغو جلسه فردا») نباید اینجا بیایند؛
+            # فقط فرم‌های دستوری کوتاه مجازند.
+            if len(t.split()) <= 2:
+                return True
+    return False
 
 
 async def get_reply_info(event, client=None) -> Optional[dict]:
@@ -531,6 +577,9 @@ def _is_confirmation_response(text: str, p: dict) -> bool:
     if kind in ("leave", "media_select"):
         if any(tok.isdigit() for tok in tokens) or "همه" in tokens or "all" in tokens:
             return True
+    if kind == "confirm_delete_messages":
+        if any(ph in t for ph in ("پاک کن", "حذف کن", "ادامه بده")):
+            return True
     return False
 
 
@@ -662,6 +711,28 @@ async def _answer_pending(event, p: dict, text: str) -> None:
         from services.media import media_flow
         await media_flow.resume_media_fetch(client, event, p, text)
         return
+    if kind == "confirm_delete_messages":
+        n = int(p.get("n") or 0)
+        chat_id = p.get("chat_id") or event.chat_id
+        if _answer_yes(text, ("پاک کن", "حذف کن", "ادامه بده")):
+            status = await event.reply("🗂 در حال بکاپ‌گیری از پیام‌ها قبل از حذف...")
+            self_sent.add(status.id)
+            try:
+                report = await cleaner.run_delete(
+                    client, chat_id, p.get("command_msg_id"), n,
+                    status_callback=lambda t: _stage(status, t),
+                    skip_ids=set(p.get("skip_ids") or ()) | {status.id},
+                )
+                await _safe_edit_or_send(event, status, report["message"])
+            except Exception as e:
+                log.error("Delete with backup failed: %s", e)
+                await _safe_edit_or_send(
+                    event, status,
+                    "❌ خطا در عملیات حذف؛ هیچ پیامی بدون بکاپ تأییدشده حذف نمی‌شود.",
+                )
+        else:
+            await event.reply("باشه، حذف پیام‌ها لغو شد.")
+        return
     if kind == "confirm_skill":
         if _answer_yes(text, ("بساز", "ثبت کن")):
             from ai_engine import skills_manager
@@ -775,11 +846,203 @@ async def _trigger_learn(question: str, answer: str, scope_id: Optional[str] = N
             log.debug("Cognitive reflection exception: %s", e)
 
 
-# کلمات کلیدی سطح ماژول برای تشخیص ویس/عمل/پژوهش (جلوگیری از تکرار و misfire)
-VOICE_WORDS = ("ویس", "وویس", "صوتی", "حرف بزن")
-ACTION_WORDS = ("بگیر", "بده", "بفرست", "بگو", "کن", "بساز", "ارسال", "بخون")
+# Module-level research keywords
 RESEARCH_WORDS = ("چطوری", "چگونه", "چیه", "چیست", "چرا", "بهترین", "روش", "راهنمایی",
                   "آموزش", "بررسی", "مقایسه", "تحلیل", "تفاوت", "راه حل", "توضیح")
+
+_VOICE_REPLY_WORDS = ("ویس", "وویس", "صوتی", "صوت", "صدا")
+_VOICE_REPLY_ACTIONS = ("جواب", "بگو", "بده", "بفرست", "بگیر", "بخون", "کن", "بساز", "ارسال", "پاسخ", "حرف بزن")
+
+
+def _wants_voice_reply(q: str) -> bool:
+    """Detect voice reply request semantics (e.g. reply with voice, speak aloud, send voice note)."""
+    q = (q or "").lower()
+    explicit = any(p in q for p in (
+        "با ویس جواب", "صوتی جواب", "با صدا بگو", "با صوت جواب", "با صدا جواب",
+        "جوابم رو ویس", "جوابم رو صوتی", "جوابم رو صدا", "جواب ویس", "جواب صوتی",
+        "پاسخ صوتی", "پاسخ ویس", "ویس کن", "صوتی کن", "صدا بگو",
+    ))
+    if explicit:
+        return True
+    return any(w in q for w in _VOICE_REPLY_WORDS) and any(w in q for w in _VOICE_REPLY_ACTIONS)
+
+
+# ── Voice Mode / Capri Home / Message Cleaner / Channel Summary ──
+
+def _is_voice_note(msg) -> bool:
+    """Check whether message is an audio voice note or round video note."""
+    if not msg:
+        return False
+    return bool(getattr(msg, "voice", None) or getattr(msg, "video_note", None))
+
+
+_VM_MARKERS = ("حالت ویس", "ویس مود", "مود ویس", "voice mode", "حالت صوتی")
+_VM_ON_WORDS = ("روشن", "فعال", "بزن", "on", "enable", "start")
+_VM_OFF_WORDS = ("خاموش", "غیرفعال", "قطع", "off", "disable", "ببند")
+
+
+def _parse_voice_mode_command(q: str):
+    """Parse Voice Mode toggles. True=on, False=off, None=unspecified."""
+    t = _normalize_fa(q or "")
+    if not any(m in t for m in _VM_MARKERS):
+        return None
+    # Disable keyword matches take precedence over enable
+    if any(w in t for w in _VM_OFF_WORDS):
+        return False
+    if any(w in t for w in _VM_ON_WORDS):
+        return True
+    return None
+
+
+async def _transcribe_voice_mode(event) -> Optional[str]:
+    """Transcribe owner voice note in Voice Mode with separated download and STT timing logs."""
+    os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
+    path = os.path.join(config.DOWNLOAD_DIR, f"vmod_{int(time.time() * 1000)}.ogg")
+    t0 = time.time()
+    try:
+        await client.download_media(event.message, file=path)
+        t_dl = time.time()
+        text = await asyncio.to_thread(voice.transcribe, path)
+        t_stt = time.time()
+        log.info("Voice Mode STT: download=%.2fs transcribe=%.2fs", t_dl - t0, t_stt - t_dl)
+        return (text or "").strip() or None
+    except Exception as e:
+        log.error("Voice Mode STT failed: %s", type(e).__name__)
+        return None
+    finally:
+        _safe_unlink(path)
+
+
+def _log_voice_mode_reply(from_voice_mode: bool, t0: float) -> None:
+    """Log total turnaround time for Voice Mode reply."""
+    if from_voice_mode and t0:
+        log.info("Voice Mode reply: %.2fs", time.time() - t0)
+
+
+_SUMMARY_LIST_MARKERS = (
+    "کانال های خلاصه", "کانالهای خلاصه", "کانال های خلاصه سازی", "کانالهای خلاصه سازی",
+    "لیست خلاصه", "خلاصه کانال ها", "خلاصه کانالها", "چه کانالهایی", "چه کانال هایی",
+    "کدوم کانالها", "کدوم کانال ها",
+)
+_SUMMARY_REMOVE_MARKERS = (
+    "از لیست خلاصه حذف", "از لیست خلاصه بردار", "از خلاصه حذف", "از خلاصه بردار",
+    "از خلاصه دربیار", "از خلاصه پاک", "حذف از خلاصه", "بردار از خلاصه",
+)
+_SUMMARY_ADD_MARKERS = (
+    "به لیست خلاصه اضافه", "برای خلاصه اضافه", "به خلاصه اضافه", "به خلاصه بذار",
+    "به خلاصه بزار", "به خلاصه کن", "اضافه به خلاصه", "تو خلاصه بذار", "تو خلاصه بزار",
+)
+_SUMMARY_CLEAN_WORDS = (
+    "به لیست خلاصه اضافه", "از لیست خلاصه حذف", "از لیست خلاصه بردار",
+    "از خلاصه دربیار", "برای خلاصه اضافه", "به خلاصه اضافه", "به خلاصه بذار",
+    "به خلاصه بزار", "به خلاصه کن", "اضافه به خلاصه", "تو خلاصه بذار", "تو خلاصه بزار",
+    "از خلاصه حذف", "از خلاصه بردار", "از خلاصه پاک", "حذف از خلاصه", "بردار از خلاصه",
+    "کانال های خلاصه سازی", "کانالهای خلاصه سازی", "کانال های خلاصه", "کانالهای خلاصه",
+    "لیست خلاصه", "خلاصه کانال ها", "خلاصه کانالها",
+)
+
+
+def _extract_channel_name(q: str) -> str:
+    """Extract channel name or username from summary command."""
+    m = re.search(r"(@[A-Za-z0-9_]{3,}|https?://t\.me/\S+|t\.me/\S+)", q or "")
+    if m:
+        return m.group(1).rstrip(".,،؛:!؟?»\"'")
+    t = q or ""
+    for p in sorted(_SUMMARY_CLEAN_WORDS, key=len, reverse=True):
+        t = t.replace(p, " ")
+    for w in ("رو", "را", "به", "از", "لیست", "اضافه", "حذف", "بردار", "دربیار", "بذار",
+              "بزار", "کن", "بکن", "کانال", "کانالها", "های", "خلاصه", "لطفا", "برای", "برام"):
+        t = re.sub(r"(?i)(?<!\S)" + re.escape(w) + r"(?!\S)", " ", t)
+    return " ".join(t.split()).strip(" «»\"'.,،؛:!؟?")
+
+
+def _summary_channel_command(q: str):
+    """تشخیص فرمان‌های مدیریت فهرست خلاصه کانال‌ها. (kind, arg) برمی‌گرداند."""
+    t = _normalize_fa(q or "")
+    if not t or "خلاصه" not in t:
+        return None, ""
+    if any(m in t for m in _SUMMARY_REMOVE_MARKERS):
+        return "remove", _extract_channel_name(t)
+    if any(m in t for m in _SUMMARY_LIST_MARKERS):
+        return "list", ""
+    if any(m in t for m in _SUMMARY_ADD_MARKERS):
+        return "add", _extract_channel_name(t)
+    return None, ""
+
+
+async def _handle_summary_command(event, status, kind: str, arg: str) -> None:
+    """اجرای فرمان‌های فهرست خلاصه کانال‌ها (فقط از مسیر مالک صدا زده می‌شود)."""
+    if kind == "list":
+        chans = channel_summary.get_channels()
+        if not chans:
+            await status.edit(
+                "📰 هنوز کانالی برای خلاصه‌سازی انتخاب نکرده‌اید.\n"
+                "مثال: «کاپری کانال @example رو به خلاصه اضافه کن»"
+            )
+            return
+        lines = [f"{i}. {ch.get('name') or ch.get('id')}" + (f" — @{ch['username']}" if ch.get("username") else "")
+                 for i, ch in enumerate(chans, 1)]
+        await _safe_edit_or_send(event, status, "📰 **کانال‌های خلاصه‌سازی:**\n" + "\n".join(lines))
+        return
+
+    if not arg:
+        await status.edit("❓ اسم یا یوزرنیم کانال را مشخص کنید. مثلاً: «کاپری کانال @example رو به خلاصه اضافه کن»")
+        return
+
+    if kind == "remove":
+        before = len(channel_summary.get_channels())
+        after = channel_summary.remove_channel(arg)
+        if len(after) == before:
+            await status.edit(f"❌ کانالی مطابق «{arg}» در فهرست خلاصه پیدا نشد.")
+        else:
+            await status.edit(f"🗑 «{arg}» از فهرست خلاصه کانال‌ها حذف شد.")
+        return
+
+    if kind == "add":
+        await _stage(status, f"🔎 در حال پیدا کردن کانال «{arg}»...")
+        target = arg.strip()
+        if "t.me/" in target:
+            target = target.split("t.me/")[-1].strip("/")
+            if target.lower().startswith("joinchat/"):
+                target = target.split("joinchat/")[-1]
+        entity = None
+        try:
+            entity = await client.get_entity(target)
+        except Exception:
+            entity = None
+        if entity is None:
+            found = await channels.find_channels(client, target.lstrip("@"), limit=20, max_scan=500)
+            if found:
+                entity = found[0].entity
+        if entity is None:
+            await _safe_edit_or_send(
+                event, status,
+                f"❌ کانال «{arg}» پیدا نشد. مطمئن شوید عضو آن هستید و یوزرنیم/لینک درست است."
+            )
+            return
+        try:
+            latest = await client.get_messages(entity, limit=1)
+        except Exception as e:
+            log.warning("Cannot read channel %s for summary: %s", arg, e)
+            await _safe_edit_or_send(
+                event, status,
+                f"❌ به پیام‌های کانال «{arg}» دسترسی ندارم؛ ابتدا عضو کانال شوید و سپس دوباره تلاش کنید."
+            )
+            return
+        seed = latest[0].id if latest else None
+        cid = tl_utils.get_peer_id(entity)
+        name = getattr(entity, "title", None) or getattr(entity, "username", None) or arg
+        uname = getattr(entity, "username", None) or ""
+        channel_summary.add_channel(
+            name, cid, uname, seed_msg_id=seed,
+            access_hash=getattr(entity, "access_hash", None),
+        )
+        await _safe_edit_or_send(
+            event, status,
+            f"✅ کانال «{name}» به فهرست خلاصه اضافه شد.\n"
+            "از این پس هر ۳۰ دقیقه مطالب جدیدش (از همین نقطه به بعد) خلاصه و در تاپیک «خلاصه کانال‌ها» ارسال می‌شود."
+        )
+        return
 
 
 def _chunk_text(text: str, max_size: int = 4000) -> list:
@@ -944,6 +1207,57 @@ def _clean_voice_text(text: str) -> str:
         clean_lines.append(line)
     res = "\n".join(clean_lines).strip()
     return res or text.strip()
+
+
+async def _send_voice_answer(event, status, answer: str, scope_id=None, question: str = "",
+                             is_tainted: bool = False, remember: bool = True) -> bool:
+    """تبدیل پاسخ متنی به ویس و ارسال آن؛ True یعنی ویس ارسال شد و پاسخ متنی لازم نیست."""
+    if not answer or not str(answer).strip():
+        return False
+    voice_text = _clean_voice_text(answer)
+    if not voice_text:
+        return False
+    os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
+    ts = int(time.time() * 1000)
+    mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
+    ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
+    try:
+        t_tts = time.time()
+        ok = await voice.speak(voice_text, mp3, client=client)
+        converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
+        if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
+            try:
+                import edge_tts
+                clean_fb = voice.prepare_for_tts(voice_text)
+                c = edge_tts.Communicate(clean_fb, "fa-IR-FaridNeural", rate="+5%")
+                await c.save(mp3)
+                converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
+                ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
+            except Exception:
+                ok = False
+        log.info("Voice reply TTS: %.2fs (ok=%s)", time.time() - t_tts, bool(ok))
+        if not (ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000):
+            return False
+
+        reply_msg = getattr(event, "message", None)
+        reply_id = reply_msg.id if reply_msg else getattr(event, "id", None)
+        vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
+        register_self_sent(vmsg, default_chat_id=event.chat_id)
+        if status:
+            try:
+                await status.delete()
+            except Exception:
+                pass
+        if remember and scope_id and not is_tainted:
+            memory.remember_exchange(scope_id, question, voice_text)
+            asyncio.create_task(_trigger_learn(question, voice_text, scope_id, event.chat_id))
+        return True
+    except Exception as e:
+        log.warning("Voice reply send failed: %s", type(e).__name__)
+        return False
+    finally:
+        _safe_unlink(mp3)
+        _safe_unlink(ogg)
 
 
 async def _stage(status, text: str) -> None:
@@ -1950,6 +2264,10 @@ async def on_outgoing(event):
 
     text = event.raw_text or ""
     key = str(event.chat_id)
+    in_home = home.is_home_chat(getattr(event, "chat_id", None))
+    # پیام‌های تاپیک «بکاپ» فقط بایگانی‌اند و هرگز نباید اجرا/پردازش شوند
+    if in_home and home.is_home_backup_message(event):
+        return
 
     # بررسی تایید یا لغو پیش‌نویس پیام (Ghostwriter confirmation) با تطبیق مرز کلمه
     reply_id = getattr(event, "reply_to_msg_id", None)
@@ -1969,6 +2287,16 @@ async def on_outgoing(event):
             await event.reply(f"✖️ ارسال پیام به «{draft['name']}» لغو شد.")
             return
 
+    # Voice Mode: ویس مالک بدون تریگر، STT و سپس وارد همان موتور اصلی هوش مصنوعی می‌شود
+    from_voice_mode = False
+    if not text and settings.get_voice_mode() and _is_voice_note(event.message):
+        transcribed = await _transcribe_voice_mode(event)
+        if not transcribed:
+            await event.reply("🎧 نتونستم صدای ویس رو واضح متوجه بشم؛ لطفاً واضح‌تر ضبط کنید یا به‌صورت متن بفرستید.")
+            return
+        text = transcribed
+        from_voice_mode = True
+
     # جواب به سوال معلق یا تاییدیه کارهای حساس با تطابق کلمه مستقل و TTL مشخص
     if key in pending:
         p = pending.get(key)
@@ -1982,13 +2310,24 @@ async def on_outgoing(event):
                     await event.reply("❌ خطایی در انجام عملیات رخ داد؛ لطفاً دوباره تلاش کنید.")
                 return
 
-    # طبق ضوابط امنیتی، در on_outgoing فقط پیام‌هایی پردازش می‌شوند که تریگر در ابتدای متن باشد
-    if not starts_with_trigger(text):
+    # در Capri Home مالک بدون نوشتن «کاپری» هم مستقیماً صحبت می‌کند؛ سایر چت‌ها نیازمند تریگر ابتدای متن‌اند
+    # در Voice Mode نیز متنِ حاصل از ویس مالک (بدون تریگر) پردازش می‌شود
+    has_trigger = starts_with_trigger(text)
+    if not has_trigger and not in_home and not from_voice_mode:
         return
 
     pending.pop(key, None)  # فرمان جدید → سوال معلق قبلی لغو می‌شه
 
-    question = strip_trigger(text)
+    question = strip_trigger(text) if has_trigger else text
+    voice_reply_t0 = time.time() if from_voice_mode else 0.0
+
+    # دستور لغو عملیات در حال اجرا (فقط مالک، چون پیام خروجی است)
+    if is_cancel_command(question):
+        if ops.cancel(str(event.chat_id)):
+            await event.reply("🛑 عملیات در حال اجرا لغو شد.")
+        else:
+            await event.reply("ℹ️ الان هیچ عملیات فعالی در جریان نیست که لغو بشه.")
+        return
 
     # فرمان کنترل دسترسی: «جوابشو بده» / «جوابشو نده» (فقط مالک، چون پیام خروجی است)
     acc = _parse_access_command(question)
@@ -1996,11 +2335,13 @@ async def on_outgoing(event):
         await _handle_access_command(event, acc)
         return
 
-    # گوش/چشم: ویس یا عکس (خود پیام یا ریپلای) — فقط با اسم دستیار
-    media_msg = await _media_target(event)
-    if media_msg is not None and getattr(media_msg, "media", None):
-        if await _handle_media(event, media_msg, question):
-            return
+    # گوش/چشم: ویس یا عکس (خود پیام یا ریپلای) — فقط با اسم دستیار (یا در Capri Home)
+    # در Voice Mode، ویس قبلاً به متن تبدیل شده و نباید دوباره به‌عنوان مدیا پردازش شود
+    if not from_voice_mode:
+        media_msg = await _media_target(event)
+        if media_msg is not None and getattr(media_msg, "media", None):
+            if await _handle_media(event, media_msg, question):
+                return
 
     if not question:
         return
@@ -2009,6 +2350,7 @@ async def on_outgoing(event):
     try:
         status = await event.reply("🧠 در حال جمع‌آوری اطلاعات...")
         self_sent.add(status.id)
+        ops.register(str(event.chat_id), asyncio.current_task(), status)
 
         # استخراج داده‌های پیام ریپلای‌شده در صورت وجود
         reply_info = await get_reply_info(event, client)
@@ -2098,6 +2440,84 @@ async def on_outgoing(event):
 
         # حالت رول‌پلی (راوی تعاملی): شروع/پایان/نگه‌داشتن/ادامه + تمام پیام‌های حین بازی
         if await roleplay.handle(event, status, question, client):
+            return
+
+        # ۰. Voice Mode: روشن/خاموش کردن حالت ویس (پایدار در تنظیمات)
+        vm_cmd = _parse_voice_mode_command(question)
+        if vm_cmd is not None:
+            settings.set_voice_mode(vm_cmd)
+            if vm_cmd:
+                await status.edit("🎧 حالت ویس روشن شد. از این به بعد ویس‌های شما بدون تریگر پردازش می‌شوند.")
+            else:
+                await status.edit("🔇 حالت ویس خاموش شد. پردازش ویس مثل قبل و فقط با نوشتن «کاپری» انجام می‌شود.")
+            return
+
+        # مدیریت فهرست خلاصه کانال‌ها (افزودن/حذف/لیست) — فقط مالک
+        sc_kind, sc_arg = _summary_channel_command(question)
+        if sc_kind:
+            await _handle_summary_command(event, status, sc_kind, sc_arg)
+            return
+
+        # راه‌اندازی/بازسازی ساختار مدیریتی (Capri Home، تاپیک‌ها و پوشه capri)
+        qn_home = _normalize_fa(question)
+        if any(k in qn_home for k in (
+            "راه اندازی اولیه", "راه اندازی خانه", "راه اندازی ساختار", "ساختار مدیریتی",
+            "خانه کاپری", "ساخت capri home", "راه اندازی capri home", "ساخت خانه کاپری",
+        )):
+            await _stage(status, "🏠 در حال بررسی/ساخت ساختار مدیریتی کاپری...")
+            try:
+                res = await home.setup_home(client)
+            except Exception as e:
+                log.error("Capri Home setup failed: %s", e)
+                await _safe_edit_or_send(event, status, "❌ ساخت/بازیابی ساختار مدیریتی ناموفق بود.")
+                return
+            msg = (
+                "✅ ساختار مدیریتی کاپری آماده است.\n"
+                f"• گروه Home: `{res.get('group_id')}`\n"
+                f"• تاپیک‌ها: {', '.join(f'{k}={v}' for k, v in (res.get('topics') or {}).items()) or '—'}\n"
+                f"• پوشه capri: `{res.get('folder_id')}`"
+            )
+            if res.get("invite_link"):
+                msg += f"\n• لینک دعوت: {res['invite_link']}"
+            await _safe_edit_or_send(event, status, msg)
+            return
+
+        # Voice Mode: فرمان حذف با تعداد نامشخص → شفاف‌سازی (بدون حدس زدن فرمان حساس)
+        if from_voice_mode and any(v in question for v in cleaner.DELETE_VERBS) and cleaner.parse_delete_count(question) is None:
+            await status.edit(
+                "🎧 فرمان حذف را تشخیص دادم اما تعداد پیام‌ها واضح نبود؛ "
+                "برای امنیت چیزی حذف نکردم. لطفاً به‌صورت متن بفرستید: «۱۰ پیام پاک کن»."
+            )
+            return
+
+        # حذف پیام‌های مالک با بکاپ اجباری (فقط مالک؛ تعداد = حداکثر پیام‌های اصلی مالک)
+        if cleaner.is_delete_command(question):
+            n = cleaner.parse_delete_count(question)
+            if not n:
+                await status.edit("❓ تعداد پیام‌ها مشخص نیست. مثال: «۱۰ پیام پاک کن»")
+                return
+            bot_ids = self_sent.pairs_for_chat(event.chat_id) | {status.id}
+            if cleaner.needs_confirmation(n):
+                pending[key] = {
+                    "kind": "confirm_delete_messages",
+                    "n": n,
+                    "chat_id": event.chat_id,
+                    "command_msg_id": event.id,
+                    "skip_ids": bot_ids,
+                }
+                await status.edit(
+                    f"⚠️ قصد دارید حداکثر **{n}** پیام اصلی خودتان را از این چت حذف کنید.\n"
+                    "پیش از حذف، همه به تاپیک «بکاپ» در Capri Home منتقل می‌شوند.\n"
+                    "برای تأیید بگویید «آره» و برای لغو «نه»."
+                )
+                return
+            await _stage(status, "🗂 در حال بکاپ‌گیری از پیام‌ها قبل از حذف...")
+            report = await cleaner.run_delete(
+                client, event.chat_id, event.id, n,
+                status_callback=lambda t: _stage(status, t),
+                skip_ids=bot_ids,
+            )
+            await _safe_edit_or_send(event, status, report["message"])
             return
 
         # ۱. فرامین قطعی تنظیمات و پیکربندی:
@@ -2244,17 +2664,26 @@ async def on_outgoing(event):
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
             raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem, chat_id=scope_id)
             answer = agent.sanitize_tainted_output(raw_answer)
+            if _wants_voice_reply(question) and await _send_voice_answer(event, status, answer, remember=False):
+                _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
+                return
             await _stage(status, "📝 دارم جواب می‌دم...")
             if _is_long_or_code(answer):
                 await _send_as_md(event, status, answer)
             else:
                 await _safe_edit_or_send(event, status, answer, link_preview=False)
+            _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
             return
 
         # سوال ساده/گفتگویی (بدون ابزار) → پاسخ مستقیم و سریع با جمینای، بدون حلقه‌ی کند ایجنت
         if _is_simple_question(question):
             await _stage(status, "💭 دارم جواب می‌دم...")
             answer = await asyncio.to_thread(ai.answer_quick, question, context, mem, chat_id=scope_id)
+            if _wants_voice_reply(question) and await _send_voice_answer(
+                event, status, answer, scope_id=scope_id, question=question
+            ):
+                _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
+                return
             await _stage(status, "📝 دارم جواب می‌دم...")
             if _is_long_or_code(answer):
                 await _send_as_md(event, status, answer)
@@ -2262,6 +2691,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, answer)
             memory.remember_exchange(scope_id, question, answer)
             asyncio.create_task(_trigger_learn(question, answer, scope_id, event.chat_id))
+            _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
             return
 
         await _stage(status, "🤔 دارم فکر می‌کنم...")
@@ -2279,40 +2709,11 @@ async def on_outgoing(event):
         if answer.startswith("__DRAFT_SENT__:") or answer in ("__ROAST_SENT__", "__MEME_SENT__"):
             return
 
-        wants_voice = any(w in question for w in VOICE_WORDS) and any(w in question for w in ACTION_WORDS)
+        wants_voice = _wants_voice_reply(question)
         if wants_voice and answer:
-            voice_text = _clean_voice_text(answer)
-            ts = int(time.time() * 1000)
-            mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
-            ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
-            ok = await voice.speak(voice_text, mp3, client=client)
-            converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
-            if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
-                try:
-                    import edge_tts
-                    clean_fb = voice.prepare_for_tts(voice_text)
-                    c = edge_tts.Communicate(clean_fb, "fa-IR-FaridNeural", rate="+5%")
-                    await c.save(mp3)
-                    converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
-                    ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
-                except Exception:
-                    ok = False
-
-            if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
-                reply_to_id = getattr(event, "message", None)
-                reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
-                register_self_sent(vmsg, default_chat_id=event.chat_id)
-                _safe_unlink(mp3)
-                _safe_unlink(ogg)
-                if status:
-                    try:
-                        await status.delete()
-                    except Exception:
-                        pass
-                if not is_tainted:
-                    memory.remember_exchange(scope_id, question, voice_text)
-                    asyncio.create_task(_trigger_learn(question, voice_text, scope_id, event.chat_id))
+            if await _send_voice_answer(event, status, answer, scope_id=scope_id,
+                                        question=question, is_tainted=is_tainted):
+                _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
@@ -2324,6 +2725,7 @@ async def on_outgoing(event):
         if not is_tainted:
             memory.remember_exchange(scope_id, question, answer)
             asyncio.create_task(_trigger_learn(question, answer, scope_id, event.chat_id))
+        _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
     except Exception as e:
         log.error("Error in on_outgoing: %s", type(e).__name__, exc_info=True)
         try:
@@ -2334,6 +2736,8 @@ async def on_outgoing(event):
                 await event.reply(msg)
         except Exception:
             pass
+    finally:
+        ops.unregister(str(event.chat_id), asyncio.current_task())
 
 
 _stranger_hits = {}
@@ -2425,14 +2829,12 @@ async def on_incoming_pm(event):
     if getattr(event, "via_bot_id", None) or getattr(event.message, "via_bot_id", None) or getattr(event, "via_bot", None) or getattr(event.message, "via_bot", None):
         return
 
-    # ۲. اولین چک: هر فرستنده غیر از مالک که در لیست مجوز نباشد، هیچ پاسخی نگیرد (return ساده و بی‌صدا)
-    uid = event.sender_id
-    if not access.is_allowed(uid) or access.is_denied(uid):
+    # پیام‌های گروه مدیریتی Capri Home فقط از مسیر مالک (on_outgoing) پردازش می‌شوند
+    if home.is_home_chat(getattr(event, "chat_id", None)):
         return
 
-    text = event.raw_text or ""
-
-    # حالت سرشلوغ (DND): برای مخاطبان مجاز در پیوی و تگ‌های گروه
+    # حالت سرشلوغ (DND): برای همهٔ فرستنده‌ها (حتی خارج از لیست مجوز) در پیوی و تگ‌های گروه،
+    # دقیقاً یک‌بار به هر شناسه در هر دورهٔ DND پاسخ داده می‌شود.
     if dnd.is_dnd_active() and not getattr(event, "out", False):
         if event.is_private:
             if await dnd.handle_incoming_pv(event, client):
@@ -2440,6 +2842,13 @@ async def on_incoming_pm(event):
         elif event.is_group:
             if await dnd.handle_incoming_group_mention(event, client):
                 return
+
+    # ۲. اولین چک: هر فرستنده غیر از مالک که در لیست مجوز نباشد، هیچ پاسخی نگیرد (return ساده و بی‌صدا)
+    uid = event.sender_id
+    if not access.is_allowed(uid) or access.is_denied(uid):
+        return
+
+    text = event.raw_text or ""
 
     # حالت همزاد: برای مخاطبان مجاز در پیوی
     if ghost.is_active() and event.is_private and not has_trigger(text):
@@ -2518,37 +2927,9 @@ async def on_incoming_pm(event):
         if answer.startswith("__VOICE_SENT__:") or answer.startswith("__DRAFT_SENT__:") or answer in ("__ROAST_SENT__", "__MEME_SENT__"):
             return
 
-        wants_voice = any(w in question for w in VOICE_WORDS) and any(w in question for w in ACTION_WORDS)
+        wants_voice = _wants_voice_reply(question)
         if wants_voice and answer:
-            voice_text = _clean_voice_text(answer)
-            ts = int(time.time() * 1000)
-            mp3 = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.mp3")
-            ogg = os.path.join(config.DOWNLOAD_DIR, f"tts_{ts}.ogg")
-            ok = await voice.speak(voice_text, mp3, client=client)
-            converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg) if ok else False
-            if not ok or not converted or not os.path.exists(ogg) or os.path.getsize(ogg) < 1000:
-                try:
-                    import edge_tts
-                    clean_fb = voice.prepare_for_tts(voice_text)
-                    c = edge_tts.Communicate(clean_fb, "fa-IR-FaridNeural", rate="+5%")
-                    await c.save(mp3)
-                    converted = await asyncio.to_thread(voice.to_ogg, mp3, ogg)
-                    ok = converted and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000
-                except Exception:
-                    ok = False
-
-            if ok and os.path.exists(ogg) and os.path.getsize(ogg) >= 1000:
-                reply_to_id = getattr(event, "message", None)
-                reply_id = reply_to_id.id if reply_to_id else getattr(event, "id", None)
-                vmsg = await client.send_file(event.chat_id, ogg, voice_note=True, reply_to=reply_id)
-                register_self_sent(vmsg, default_chat_id=event.chat_id)
-                _safe_unlink(mp3)
-                _safe_unlink(ogg)
-                if status:
-                    try:
-                        await status.delete()
-                    except Exception:
-                        pass
+            if await _send_voice_answer(event, status, answer):
                 return
 
         await _stage(status, "📝 دارم جواب می‌دم...")
@@ -2589,6 +2970,17 @@ async def main():
     memory.set_owner_id(me.id)
     global _owner_id
     _owner_id = me.id
+
+    async def _startup_home_setup():
+        try:
+            res = await home.setup_home(client)
+            log.info("Capri Home ready: group=%s folder=%s topics=%s",
+                     res.get("group_id"), res.get("folder_id"), res.get("topics"))
+        except Exception as e:
+            log.error("Capri Home setup failed at startup: %s", e)
+
+    asyncio.create_task(_startup_home_setup())
+    asyncio.create_task(channel_summary.start_summary_loop(client))
     print(f"[+] Capri v{config.VERSION} - Successfully logged in as: {me.first_name} (@{me.username})", flush=True)
     print(f"[*] Assistant name: '{config.ASSISTANT_NAME}'", flush=True)
     print(f"[*] Capri is listening. Trigger keyword: '{config.ASSISTANT_NAMES[0]}'", flush=True)

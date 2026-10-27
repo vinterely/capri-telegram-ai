@@ -127,7 +127,7 @@ def _build_agent_messages(question: str, context: str, memory_str: str, is_owner
     is_group = bool(resolved_scope and (":group:" in resolved_scope or ":channel:" in resolved_scope))
 
     cog_summary = cognitive_memory.get_context_summary()
-    sys_content = AGENT_SYSTEM + f"\n\nامروز: {ai._today()}"
+    sys_content = AGENT_SYSTEM + f"\n\n🗓️ تاریخ و زمان فعلی (معتبر و پویا):\n{ai._now_context()}"
     try:
         from core import social_dynamics
         soc_mod = social_dynamics.get_behavioral_prompt_modifier(question, context, chat_id=resolved_scope)

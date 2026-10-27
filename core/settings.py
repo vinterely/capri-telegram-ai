@@ -61,6 +61,16 @@ def get_previous():
     return (s, m) if s and m else (None, None)
 
 
+def get_voice_mode() -> bool:
+    """Get Voice Mode state. When enabled, owner voice notes are processed without trigger words."""
+    return bool(load().get("voice_mode", False))
+
+
+def set_voice_mode(on: bool) -> None:
+    """Enable or disable Voice Mode (persisted in settings.json)."""
+    save(voice_mode=bool(on))
+
+
 def get_tts_engine() -> str:
     return load().get("tts_engine", "microsoft")
 
