@@ -1,6 +1,6 @@
-# 📘 Capri AI Userbot [v2.9.0] - Comprehensive Setup Tutorial
+# 📘 Capri AI Userbot [v3.1.0] - Comprehensive Setup Tutorial
 
-Welcome to the definitive setup tutorial for **Capri (v2.9.0)**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
+Welcome to the definitive setup tutorial for **Capri (v3.1.0)**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
 
 This tutorial guides you from a blank machine to a fully running, production-ready Capri userbot in under 5 minutes.
 
@@ -15,7 +15,7 @@ This tutorial guides you from a blank machine to a fully running, production-rea
 6. [🧙 Method 3: The Interactive Python Wizard (start.py)](#6--method-3-the-interactive-python-wizard-startpy)
 7. [🐳 Method 4: Docker Deployment (Recommended for Servers/VPS)](#7--method-4-docker-deployment-recommended-for-serversvps)
 8. [🛠️ Method 5: Manual Terminal Setup](#8-️-method-5-manual-terminal-setup)
-9. [Step 4: Testing Key Commands & Features (v2.9.0)](#9-step-4-testing-key-commands--features-v290)
+9. [Step 4: Testing Key Commands & Features (v3.1.0)](#9-step-4-testing-key-commands--features-v310)
 10. [Step 5: Production 24/7 Daemon Execution](#10-step-5-production-247-daemon-execution)
 11. [Troubleshooting & FAQ](#11-troubleshooting--faq)
 
@@ -184,6 +184,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ASSISTANT_NAME=Capri,capri,کاپری
 OWNER_NAME=YourName
 TIMEZONE=Asia/Tehran
+STICKER_PACK_SHORTNAME=Vinterely
 ```
 
 ### 3. Authenticate Telegram Session
@@ -199,22 +200,42 @@ python bot.py
 
 ---
 
-## 9. Step 4: Testing Key Commands & Features (v2.9.0)
+## 9. Step 4: Testing Key Commands & Features (v3.1.0)
 
 Open Telegram and test Capri in **Saved Messages**, in **Capri Home**, or in any chat:
 
-### 1. 🏠 Capri Home & Direct Management (v2.9.0)
+### 1. 💡 Structured Ideation & Brainstorming (v3.1.0)
+- `کاپری یه ایده بده برای ساخت یک محصول جدید` / `کاپری طوفان فکری کن روی [موضوع]`
+- Capri runs a fast-path structured brainstorming workflow:
+  - Validates core assumptions and target goals.
+  - Proposes unconventional, creative out-of-the-box concepts.
+  - Delivers low-friction quick wins and bold high-risk/high-reward paths.
+  - Asks 1–2 sharpening questions to refine the project.
+
+### 2. 🎀 Emotional Stickers from Vinterely Pack (v3.1.0)
+- During conversations with high emotional resonance (jokes, celebration, empathy, surprise), Capri contextually responds with matching stickers from the `Vinterely` pack.
+- Enforces an automatic 15-minute per-chat cooldown to ensure stickers remain delightful rather than spammy.
+- The ReAct agent can also invoke the `send_sticker(emotion)` tool autonomously.
+
+### 3. 🗓️ Synchronized Solar Hijri & Gregorian Date Awareness (v3.1.0)
+- `امروز چه روزیه؟` / `تاریخ امروز چیه؟`
+- Returns accurate, synchronized date context:
+  - Solar Hijri (Jalali) date + Persian weekday.
+  - Gregorian date (YYYY/MM/DD) and exact local time (`Asia/Tehran`).
+  - Web searches for recent news, prices, and software releases automatically inject the current Gregorian year to eliminate stale results.
+
+### 4. 🏠 Capri Home & Direct Management
 - Capri automatically sets up a private forum supergroup titled **`🏠 Capri Home | مدیریت کاپری`** and groups it into a Telegram dialog folder named **`capri`**.
 - Inside Capri Home, talk directly to Capri without trigger keywords.
 - Inspect the dedicated topics:
   - `🗂 بکاپ`: Confirmed pre-deletion backups of deleted messages.
   - `📰 خلاصه کانال‌ها`: Periodic digests of monitored channels.
 
-### 2. 🛑 True Operation Cancellation (v2.9.0)
+### 5. 🛑 True Operation Cancellation
 - Send `کنسل`, `لغو کن`, `متوقفش کن`, or `بیخیال` during any long-running operation (search, download, multi-step ReAct).
 - The active asynchronous task is cancelled immediately for that specific chat with zero side effects on concurrent tasks.
 
-### 3. 🗑️ Message Cleaner with Verified Backup (v2.9.0)
+### 6. 🗑️ Message Cleaner with Verified Backup
 - `کاپری ۱۰ پاک کن` / `کاپری ۵ پیام پاک کن`:
   - Scans recent outgoing messages from the owner in that chat.
   - Forwards content and metadata to the Home `🗂 بکاپ` topic.
@@ -222,36 +243,28 @@ Open Telegram and test Capri in **Saved Messages**, in **Capri Home**, or in any
   - Revokes only backed-up messages and returns an honest report.
 - Operations exceeding 20 messages prompt for interactive confirmation.
 
-### 4. 📰 Periodic Channel Summarizer (v2.9.0)
+### 7. 📰 Periodic Channel Summarizer
 - `این کانال رو به خلاصه اضافه کن` / `به خلاصه اضافه کن @channel`: Adds a channel to the monitoring list.
 - `کانال‌های خلاصه`: Lists all currently subscribed channels.
 - `از خلاصه حذف کن @channel`: Removes a channel from monitoring.
 - Capri polls posts every 30 minutes and sends clean, link-attributed summaries to Capri Home.
 
-### 5. 🎧 Voice Mode — Hands-Free Voice Interaction (v2.9.0)
+### 8. 🎧 Voice Mode — Hands-Free Voice Interaction
 - `حالت ویس روشن`: Activates Voice Mode (persisted in `settings.json`).
 - `حالت ویس خاموش`: Deactivates Voice Mode.
 - When Voice Mode is on, any voice or video note sent by the owner is automatically transcribed via Whisper and replied to with voice notes without trigger words.
 
-### 6. 🔕 Smart Absence, DND & Missed Inbox (v2.9.0)
+### 9. 🔕 Smart Absence, DND & Missed Inbox
 - `من تا ساعت ۸ نیستم` / `تا ساعت ۱۴ سر جلسه‌ام`: Activates DND with intelligent absence tracking.
 - Contextual away auto-replies are sent to private chats and mentions with a single-response-per-sender guard.
 - Missed inquiries are recorded into a bounded inbox.
 - Upon return, ask `چی شد وقتی نبودم` to receive a briefing of all missed messages.
 
-### 7. 🗓️ Dynamic Date & Time Awareness (v2.9.0)
-- `امروز چه روزیه؟` / `تاریخ امروز چیه؟`: Accurately answers today's Persian Jalali calendar date, weekday, and current time dynamically injected from the host clock (time zone: `Asia/Tehran`).
-- Eliminates temporal hallucinations for recent events and dates.
-
-### 8. 🤖 Model Switching & Catalog Navigation
+### 10. 🤖 Model Switching & Catalog Navigation
 - `کاپری مدلها` / `/models`: Opens interactive Telegram inline pagination menu to browse 253 AI models.
 - `کاپری برو رو مرکوری`: Switches to Inception Labs Mercury 3 fast diffusion agent (`i1`).
 - `k1`, `b1`, `a1`, `o1`: Switches instantly to specific provider models.
 - `کاپری مدل فعلی چیه؟`: Displays active model and provider status.
-
-### 9. 💬 Deep Reply Context & Smart Summarization
-- **Summarize Replied Message:** Reply to any long message or article and say `کاپری خلاصه کن`.
-- **Reply to Media Links:** Reply to a YouTube, Instagram, or TikTok link and say `کاپری خلاصه کن` or `کاپری دانلود کن`.
 
 ---
 
@@ -322,3 +335,6 @@ Start-Process -NoNewWindow -FilePath ".\venv\Scripts\python.exe" -ArgumentList "
 
 ### Q4: Are messages safely backed up before deletion?
 - **Guarantee:** Capri's cleaner enforces an uncompromising safety rule: zero messages are deleted without confirmed pre-deletion forwarding to the Capri Home `🗂 بکاپ` topic. If forwarding fails for any reason, the original message remains intact.
+
+### Q5: How do I change the default sticker pack?
+- **Solution:** In `.env`, set `STICKER_PACK_SHORTNAME=YourPackName`. Capri will fetch the new pack and cache the emotion mappings upon the next startup.

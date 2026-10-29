@@ -490,6 +490,20 @@ TOOL_DEFINITIONS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_sticker",
+            "description": "ارسال یک استیکر احساسی متناسب با حال‌وهوای گفتگو. فقط در لحظه‌های احساسی قوی (شوخی و خنده، همدردی، جشن و تبریک، تعجب) و حداکثر یک استیکر در هر پاسخ استفاده شود؛ هرگز پشت‌سرهم یا برای پیام‌های عادی/فنی/اطلاعاتی استیکر نفرست. پارامتر emotion یکی از: خنده، شادی، غم، عشق، تعجب، خشم، خستگی، چشمک، تشویق.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "emotion": {"type": "string", "description": "احساس استیکر: خنده/شادی/غم/عشق/تعجب/خشم/خستگی/چشمک/تشویق."}
+                },
+                "required": ["emotion"]
+            }
+        }
     }
 ]
 
@@ -1239,6 +1253,21 @@ async def execute_tool(name: str, args: dict, event, client, status=None, is_own
 
             res = await vault.purge_vault_messages(client, limit=limit, status_callback=_cb)
             return f"پاک‌سازی صندوق انجام شد: {res.get('message', '')}"
+
+        elif name == "send_sticker":
+            emotion = (args.get("emotion", "") or "").strip()
+            if not emotion:
+                return "خطا: احساس استیکر مشخص نشده است."
+            from services.social import stickers
+            lib = await stickers.ensure_library(client)
+            if not lib:
+                err = stickers.last_error()
+                if err:
+                    return f"کتابخانه استیکر خالی است؛ پک در دسترس نبود. خطا: {err}"
+                return "کتابخانه استیکر خالی است؛ پک استیکر در دسترس نبود."
+            if await stickers.send_sticker(client, event.chat_id, emotion):
+                return f"استیکر «{emotion}» ارسال شد."
+            return f"استیکر مناسبی برای احساس «{emotion}» در پک یافت نشد."
 
         # Execute runtime dynamic Hermes skill
         from ai_engine import skills_manager

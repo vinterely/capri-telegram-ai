@@ -97,7 +97,7 @@ def is_home_chat(chat_id) -> bool:
             continue
         if cid == s:
             return True
-        # Megagroup channel ID conversion: positive base ID vs negative -100 prefix ID
+        # مگاگروپ: id پایه (مثبت) در برابر id کامل (منفی با پیشوند -100)
         if s > 0 and cid < 0:
             if abs(cid) == 1000000000000 + s or abs(cid) == s:
                 return True

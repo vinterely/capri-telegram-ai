@@ -128,13 +128,13 @@ async def run_delete(client, chat_id, command_msg_id, n: int, status_callback=No
         "message": "",
     }
 
-    # 1. Ensure Capri Home group and backup topic exist
+    # ۱. اطمینان از وجود گروه Home و تاپیک بکاپ
     group_id, _ = await home.ensure_home_group(client, status_callback)
     topics = await home.ensure_home_topics(client, group_id, status_callback)
     backup_topic = topics.get("backup") or 1
     home_entity = await client.get_input_entity(group_id)
 
-    # 2. Collect target owner messages
+    # ۲. تهیه فهرست پیام‌های هدف (فقط پیام‌های مالک، نه پاسخ دیگران)
     if status_callback:
         await status_callback(f"🔍 در حال پیدا کردن {n} پیام متعلق به شما...")
     targets = await collect_owner_messages(client, chat_id, command_msg_id, n, skip_ids=skip_ids)
@@ -144,7 +144,7 @@ async def run_delete(client, chat_id, command_msg_id, n: int, status_callback=No
         report["message"] = "هیچ پیام متعلق به شما در این چت پیدا نشد که بشه حذف کرد."
         return report
 
-    # 3. Send backup header manifest to Home backup topic
+    # ۳. بکاپ هدر شناسایی‌پذیر + محتوای پیام‌ها به تاپیک «بکاپ»
     from ai_engine import ai
     chat_title = await _chat_title(client, chat_id)
     lines = [
@@ -163,7 +163,7 @@ async def run_delete(client, chat_id, command_msg_id, n: int, status_callback=No
     except Exception as e:
         logger.warning("Failed to send backup header: %s", e)
 
-    # 4. Forward each target and track verification
+    # ۴. فوروارد تک‌تک و ثبت موفقیت/شکست
     for m in targets:
         ok = False
         try:
@@ -177,7 +177,7 @@ async def run_delete(client, chat_id, command_msg_id, n: int, status_callback=No
             report["backup_failed"].append(m.id)
         await asyncio.sleep(0.3)
 
-    # 5. Revoke/delete ONLY verified backed-up messages
+    # ۵. حذف فقط پیام‌های بکاپ‌شده
     for mid in report["backed_up"]:
         try:
             await client.delete_messages(chat_id, mid, revoke=True)
@@ -187,7 +187,7 @@ async def run_delete(client, chat_id, command_msg_id, n: int, status_callback=No
             report["delete_failed"].append(mid)
         await asyncio.sleep(0.3)
 
-    # 6. Truthful final report
+    # ۶. گزارش واقعی
     b_ok = len(report["backed_up"])
     b_fail = len(report["backup_failed"])
     d_ok = len(report["deleted"])

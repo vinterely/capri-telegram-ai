@@ -81,7 +81,10 @@ def _today() -> str:
     now_tehran = datetime.now(_local_tz())
     jalali = jdatetime.datetime.fromgregorian(datetime=now_tehran)
     weekdays = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
-    return f"{jalali.strftime('%Y/%m/%d')} ({weekdays[jalali.weekday()]})"
+    return (
+        f"{jalali.strftime('%Y/%m/%d')} ({weekdays[jalali.weekday()]}) — "
+        f"{now_tehran.strftime('%Y/%m/%d')} میلادی"
+    )
 
 
 def _now_context() -> str:
@@ -93,6 +96,7 @@ def _now_context() -> str:
     offset = now.strftime("%z")
     return (
         f"{jalali.strftime('%Y/%m/%d')} ({weekdays[jalali.weekday()]}) — "
+        f"{now.strftime('%Y/%m/%d')} میلادی — "
         f"ساعت {now.strftime('%H:%M:%S')} — منطقه زمانی {config.TIMEZONE} (UTC{offset})"
     )
 

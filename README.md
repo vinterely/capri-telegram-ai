@@ -1,11 +1,11 @@
-# Capri — Advanced Autonomous Telegram AI Userbot (v2.9.0)
+# Capri — Advanced Autonomous Telegram AI Userbot (v3.1.0)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/vinterely/capri-telegram-ai/main/assets/banner.png" alt="Capri Telegram AI Banner" width="700" onerror="this.style.display='none'"/>
 </p>
 
 <p align="center">
-  <a href="https://github.com/vinterely/capri-telegram-ai/releases"><img src="https://img.shields.io/badge/version-2.9.0-blue.svg" alt="Version 2.9.0"/></a>
+  <a href="https://github.com/vinterely/capri-telegram-ai/releases"><img src="https://img.shields.io/badge/version-3.1.0-blue.svg" alt="Version 3.1.0"/></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue" alt="Python Version"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"/></a>
   <a href="MODELS.md"><img src="https://img.shields.io/badge/models-253%20AI%20Models-orange" alt="Supported Models"/></a>
@@ -37,10 +37,21 @@ Capri features a dedicated **ReAct Agent Loop** (Reasoning + Acting + Observing)
 - **JSON Error Feedback Loop:** Catches invalid tool arguments or schema errors and feeds structured correction prompts back to the LLM for self-correction.
 - **Per-Request State Isolation (`AgentState`):** Every Telegram request possesses an isolated execution state with unique request IDs, independent error logs, and dedicated taint scopes.
 - **Circuit Breaker & Multi-Provider Failover:** Automatically detects HTTP 429 rate limits, quota exhaustions, and provider timeouts, suspending faulty endpoints with proportional cooldowns and seamlessly failing over to healthy providers.
-- **Dynamic Date & Time Awareness:** Live Persian Jalali calendar date, weekday, current time, and validated timezone (default: `Asia/Tehran`, configurable via `TIMEZONE` in `.env`) are injected dynamically on every request. Stale temporal hallucinations are eliminated, while static knowledge queries are answered immediately without redundant web searches.
+- **Synchronized Solar Hijri & Gregorian Date Awareness:** Today's Solar Hijri (Jalali) date, Gregorian date, Persian weekday, exact time, and validated timezone (default: `Asia/Tehran`, configurable via `TIMEZONE` in `.env`) are calculated from system clock and injected dynamically on every request and into web search query optimization.
 - **True Operation Cancellation (`core/ops.py`):** Active asynchronous tasks (ReAct loops, downloads, long searches) are registered in a per-chat operation registry. Commands such as *"Cancel"*, *"Stop"*, or *"Nevermind"* (*«کنسل»*, *«لغو کن»*, *«متوقفش کن»*) immediately cancel the running task for that specific chat without affecting other concurrent tasks.
 
-### 2. 🏠 Capri Home — Private Management Supergroup & Dialog Folder (`services/telegram/home.py`)
+### 2. 🎀 Emotional Stickers Engine (`services/social/stickers.py` & `sticker_library.json`)
+- **Emotion-Mapped Sticker Pack:** Automatically compiles a categorized sticker catalog from the configured Telegram sticker pack (`Vinterely`, customizable via `STICKER_PACK_SHORTNAME`).
+- **9 Core Affective Dimensions:** Maps sticker emojis to distinct emotional categories: *Laughter* (خنده), *Joy* (شادی), *Sadness* (غم), *Love* (عشق), *Surprise* (تعجب), *Anger* (خشم), *Fatigue* (خستگی), *Wink* (چشمک), and *Praise* (تشویق).
+- **Fast-Path & Autonomous Tool Calling:** Sends contextual stickers during high-emotion conversational moments (jokes, empathy, celebration) with strict 15-minute per-chat cooldowns to prevent spam, while exposing the `send_sticker` tool to the ReAct agent.
+- **Zero-Hallucination Fallback:** If the pack is inaccessible or unpopulated, no stickers are sent—avoiding broken links or empty messages.
+
+### 3. 💡 Structured Ideation & Brainstorming (`custom_skills/ideation.py`)
+- **Multi-Perspective Strategy:** Initiates an accelerated, structured brainstorming pipeline upon natural ideation prompts (*«یه ایده بده»*, *«ایده‌پردازی کن»*, *«طوفان فکری»*, *«خلاق باش»*).
+- **Comprehensive Innovation Framework:** Produces target assumptions, unconventional out-of-the-box concepts, low-friction quick wins, bold high-risk/high-reward ideas, feasibility breakdowns, and sharpening refinement questions.
+- **Cognitive Profile Alignment:** Smoothly tailors idea domains to user interests recorded in cognitive memory without hallucinating fake statistics or fictitious sources.
+
+### 4. 🏠 Capri Home — Private Management Supergroup & Dialog Folder (`services/telegram/home.py`)
 Bootstraps and maintains an automated administrative hub on Telegram:
 - **Forum Supergroup (`🏠 Capri Home | مدیریت کاپری`):** A private forum supergroup where the owner can chat with Capri directly without trigger keywords or prefixes.
 - **Telegram Dialog Folder (`capri`):** Automatically creates a clean dialog folder grouping the Capri Home supergroup and the Capri Vault supergroup together.
@@ -48,27 +59,27 @@ Bootstraps and maintains an automated administrative hub on Telegram:
   - `🗂 بکاپ` (Backup): Receives verified pre-deletion message backups before message removal.
   - `📰 خلاصه کانال‌ها` (Channel Summaries): Receives periodic digests of subscribed Telegram channels.
 
-### 3. 🗑️ Owner Message Cleaner with Verified Backup (`services/telegram/cleaner.py`)
+### 5. 🗑️ Owner Message Cleaner with Verified Backup (`services/telegram/cleaner.py`)
 Enables clean and safe message deletion for the account owner (*«کاپری ۱۰ پاک کن»* / *«کاپری ۵ پیام پاک کن»*):
 - **Guaranteed Pre-Deletion Backup:** Zero messages are deleted without confirmed backup. Target messages and metadata are first forwarded to the Home `🗂 بکاپ` topic.
 - **Selective Deletion:** Only messages whose backup succeeded are revoked and deleted from the target chat; failed backups remain completely untouched.
 - **Confirmation Threshold:** Deleting more than 20 messages requires explicit interactive confirmation to prevent accidental bulk loss.
 
-### 4. 📰 Periodic Channel Summarizer (`services/telegram/channel_summary.py`)
+### 6. 📰 Periodic Channel Summarizer (`services/telegram/channel_summary.py`)
 - **Automated Channel Ingestion:** Monitor important channels with natural commands (*«این کانال رو به خلاصه اضافه کن»* or *«کانال‌های خلاصه»*).
 - **Scheduled Background Polling:** Polls new posts every 30 minutes, tracking message cursors in `channel_summary.json` to prevent duplicates.
 - **High-Fidelity AI Digests:** Synthesizes structured, link-attributed Persian digests delivered directly to the Home `📰 خلاصه کانال‌ها` topic.
 
-### 5. 🎧 Voice Mode — Continuous Hands-Free Voice Interaction
+### 7. 🎧 Voice Mode — Continuous Hands-Free Voice Interaction
 - **Voice Mode Toggle:** Enable or disable hands-free conversation with *«حالت ویس روشن»* / *«حالت ویس خاموش»* (persisted in `settings.json`).
 - **Triggerless Voice Interaction:** When Voice Mode is active, any incoming voice note or video note from the owner is automatically transcribed via Whisper and answered with a synthesized voice note—no trigger words needed.
 
-### 6. 🔕 Smart Absence, Do Not Disturb & Missed Inbox (`services/social/dnd.py`)
+### 8. 🔕 Smart Absence, Do Not Disturb & Missed Inbox (`services/social/dnd.py`)
 - **Natural Absence Understanding:** Recognizes absence duration expressions (*«من تا ساعت ۸ نیستم»*, *«تا فردا صبح جلسه دارم»*).
 - **AI-Powered Away Auto-Replies:** Generates contextual, polite away responses for private chats and group mentions with a single-reply-per-sender guard to prevent notification spam.
 - **Missed Messages Inbox:** Logs incoming inquiries during owner absence into a bounded inbox. Upon return, asking *«چی شد وقتی نبودم»* yields a concise summary of missed messages and senders.
 
-### 7. 🤖 Universal Model Selector (253 Models across 7 Providers)
+### 9. 🤖 Universal Model Selector (253 Models across 7 Providers)
 Switch between 253 state-of-the-art AI models instantly via short Unique Identifiers (UIDs) or natural language:
 - **XKIRO (`k1`..`k97`):** 97 flagship, coding, and open-source models.
 - **B.AI (`b1`..`b62`):** 62 enterprise and conversational models (MiniMax, Claude, GPT-4o).
@@ -79,13 +90,13 @@ Switch between 253 state-of-the-art AI models instantly via short Unique Identif
 - **Inception Labs (`i1`):** Mercury 3 Diffusion-LLM with native tool-calling.
 - **Interactive Inline Pagination:** Send `Capri models` or `/models` to open an interactive Telegram pagination menu to browse, inspect, and activate models with single taps.
 
-### 8. 💬 Deep Reply Context & Situational Environment Grounding
+### 10. 💬 Deep Reply Context & Situational Environment Grounding
 - **Structured Reply Context (`get_reply_info`):** When replying to any Telegram message, Capri extracts the original message text, media type, links, message ID, and author identity.
 - **Direct Summarization on Reply:** Replying to any long article or message with *"Summarize this"* (*خلاصه کن*) automatically injects the original text into the summarization pipeline.
 - **Automatic Link Forwarding:** Replying with *"Download this"* or *"Summarize video"* to a message containing a YouTube, Instagram, or TikTok link automatically routes the link to the appropriate handler.
 - **Group Identity Separation:** Accurately distinguishes between the current sender and the author of the replied-to message in group chats, eliminating identity confusion.
 
-### 9. 🛡️ Scoped Memory Architecture & Privacy Isolation
+### 11. 🛡️ Scoped Memory Architecture & Privacy Isolation
 - **Namespace Partitioning:** Memory records are strictly partitioned into isolated namespaces:
   - `memory:group:<chat_id>`: Shared group chat memory.
   - `memory:dm:<user_id>`: Individual private direct message memory.
@@ -93,7 +104,7 @@ Switch between 253 state-of-the-art AI models instantly via short Unique Identif
 - **Zero Privacy Leakage:** Replying to a user in a group chat never exposes or queries private facts from private direct messages.
 - **Cognitive Reflection:** Automatically extracts user preferences, communication styles, and interaction insights in private conversations.
 
-### 10. 🎙️ High-Fidelity Voice Synthesis (TTS) & Whisper Transcription
+### 12. 🎙️ High-Fidelity Voice Synthesis (TTS) & Whisper Transcription
 - **48kHz Opus Voice Notes:** Sends studio-grade audio bubbles directly in Telegram's native voice note format.
 - **Multiple TTS Engines:**
   - Telegram Voice Bot integration with 7 distinct voices and 6 expressive tones.
@@ -101,7 +112,7 @@ Switch between 253 state-of-the-art AI models instantly via short Unique Identif
   - Google Gemini TTS fallback.
 - **Whisper Voice-to-Text:** Transcribes voice notes and voice messages with fast summaries delivered to Saved Messages.
 
-### 11. 📁 Capri Vault — Automated Telegram Forum Supergroup
+### 13. 📁 Capri Vault — Automated Telegram Forum Supergroup
 - **Forum Organization:** Automatically sets up and manages a private forum supergroup (`Capri Vault`) with 7 categorized topics:
   - 📝 Personal & Notes
   - 🎬 Movies & Series
@@ -130,6 +141,7 @@ capri-telegram-ai/
 ├── TUTORIAL.md                 # Complete step-by-step setup tutorial
 ├── README.md                   # English documentation (this file)
 ├── README_FA.md                # Comprehensive Persian documentation
+├── sticker_library.json        # Pre-compiled emotional sticker cache
 ├── requirements.txt            # Production dependencies
 ├── requirements-dev.txt        # Development and testing dependencies
 │
@@ -146,9 +158,9 @@ capri-telegram-ai/
 │
 ├── ai_engine/                  # Intelligence & inference layers
 │   ├── agent.py                # Autonomous ReAct agent loop and circuit breaker
-│   ├── prompts.py              # System identity prompts and personality directives
+│   ├── prompts.py              # System identity prompts, personality & tool inventory
 │   ├── tools.py                # Schema definitions and dispatcher for 20+ tools
-│   ├── ai.py                   # High-level LLM interface & dynamic date/time injection
+│   ├── ai.py                   # High-level LLM interface & synchronized date/time injection
 │   ├── providers.py            # Resilient HTTP transport with connection pooling
 │   ├── models.py               # Model catalog registry, natural parser & UID routing
 │   ├── provider_xkiro.py       # XKIRO provider module (97 models, UID: k)
@@ -170,9 +182,9 @@ capri-telegram-ai/
 │   │   ├── ytdownload.py       # Autonomous video downloader
 │   │   ├── ai_nav.py           # Interactive inline-keyboard automation
 │   │   └── socialdl.py         # Instagram, TikTok, X, Pinterest & SoundCloud downloader
-│   ├── search/                 # Trilingual Google Serper web search
+│   ├── search/                 # Trilingual Google Serper web search with current year injection
 │   ├── voice/                  # Edge-TTS, Gemini TTS & Jarvis voice synthesis
-│   └── social/                 # DND, ghostwriter, roleplay, meme generator & roast engine
+│   └── social/                 # Stickers, ideation, DND, ghostwriter, meme generator & roast
 │
 └── tests/                      # Comprehensive test suite (284 passing tests)
     ├── test_date_cancel_absence.py          # Dynamic date, cancellation & absence tests
@@ -263,6 +275,7 @@ OWNER_NAME=YourName
 TIMEZONE=Asia/Tehran
 HOME_GROUP_TITLE=🏠 Capri Home | مدیریت کاپری
 CAPRI_FOLDER_TITLE=capri
+STICKER_PACK_SHORTNAME=Vinterely
 
 # Primary AI Provider Keys
 GEMINI_API_KEY=your_gemini_api_key_here
@@ -288,7 +301,7 @@ Capri includes an extensive automated test suite covering all ReAct workflows, m
 # Run all 284 unit and regression tests
 python -m unittest discover -s tests
 
-# Run dedicated v2.9.0 tests
+# Run dedicated date, cancellation & absence tests
 python -m unittest tests/test_date_cancel_absence.py tests/test_home_voice_cleaner_summary.py
 ```
 

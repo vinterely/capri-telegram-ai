@@ -79,12 +79,17 @@ def generate_multilingual_queries(topic: str) -> dict:
     - فارسی: جهت دسترسی به وب فارسی
     """
     from ai_engine import providers
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
     sys_prompt = (
         "You are an expert research search query optimizer. Given a user topic or question, "
         "produce 3 optimal, concise search queries for Google:\n"
         "- en: English (optimized for Reddit, specialized forums, guides, wikis)\n"
         "- zh: Simplified Chinese (optimized for NGA, Baidu, gaming/tech wikis)\n"
         "- fa: Persian (concise keywords for Iranian web)\n\n"
+        f"Today's date is {today} (Gregorian). For time-sensitive topics "
+        "(news, prices, recent releases, current events), include the current year "
+        "in the queries and never use stale/older years.\n\n"
         "Return ONLY a valid JSON object with keys 'en', 'zh', 'fa'. No commentary or markdown."
     )
     try:

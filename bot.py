@@ -1332,6 +1332,44 @@ def _extract_rewrite_text(q: str) -> str:
     return " ".join(q.split()).strip("،,:.؟?! «»\"' ")
 
 
+_IDEATION_PHRASES = (
+    "ایده پردازی", "ایده‌پردازی", "ایدهپردازی", "طوفان فکری", "طوفان مغزی",
+    "brainstorm", "خلاق باش", "خلاقیت بده", "خلاقیت به خرج بده", "ایده",
+)
+
+# صورت‌های محاوره‌ایِ ه‌حذف‌شدهٔ «ایده» (ایدت = ایده‌ات، ایدم = ایده‌ام، ایدمون = ایده‌مون و ...)
+# فقط وقتی به‌صورت کلمهٔ مستقل بیایند تا با «بایدت/بایدم/فایدت» اشتباه نشوند.
+_IDEATION_COLLOQUIAL_RE = re.compile(
+    r"(^|[\s،,.؟!؟«»()])(ایدت|ایدم|ایدمون|ایدتون|ایدشون|ایدش|ایدهمون)([\s،,.؟!؟«»()]|$)"
+)
+
+
+def _is_ideation_request(q: str) -> bool:
+    """تشخیص درخواست ایده‌پردازی/طوفان فکری (اسکیل ایده‌پردازی قوی)."""
+    q = q or ""
+    if any(w in q for w in _IDEATION_PHRASES):
+        return True
+    return bool(_IDEATION_COLLOQUIAL_RE.search(q))
+
+
+def _extract_ideation_topic(q: str) -> str:
+    """استخراج موضوع ایده‌پردازی از درخواست (اگر نیامد، اسکیل از ریپلای می‌خواند)."""
+    q = _normalize_fa(q)
+    for w in _IDEATION_PHRASES:
+        q = q.replace(w, " ")
+    q = _IDEATION_COLLOQUIAL_RE.sub(" ", q)
+    strip_words = (
+        "کاپری", "لطفا", "لطفاً", "بی زحمت", "بی‌زحمت",
+        "یه", "یک", "برام", "برایم", "برامون", "بده", "بزن", "بگو", "بگیر",
+        "کن", "بکن", "میخوام", "میخام", "می خواهم", "می‌خوام", "می‌خام",
+        "برای", "روی", "رو", "در مورد", "درباره", "راجع به", "برا", "واسه",
+        "چیه", "چطوره", "چطور", "خودمون", "خودت", "خودم",
+    )
+    for w in strip_words:
+        q = re.sub(r"(?i)\b" + re.escape(w) + r"\b", " ", q)
+    return " ".join(q.split()).strip("،,:.؟?! «»\"' ")
+
+
 _IMAGE_QUERY_WORDS = ("سعکس", "تصویر", "پوستر")
 _IMAGE_ACTION_WORDS = (
     "نشونم بده", "نشون بده", "نشان بده", "پیداش کن", "پیدا کن", "بفرستش",
@@ -1374,6 +1412,37 @@ def _is_web_question(q: str) -> bool:
     if any(w in q for w in _WEB_LOCAL_GUARD):
         return False
     return any(w in q for w in _WEB_FRESH_WORDS)
+
+
+async def _maybe_send_emotional_sticker(event, client, scope_id, question: str) -> None:
+    """Send an emotional sticker on the fast-path with strict cooldown and populated library check."""
+    try:
+        from services.social import stickers
+        from core import social_dynamics
+
+        lib = stickers.get_library()
+        if not lib:
+            return
+
+        q = (question or "").strip()
+        emotion = None
+        behavior = social_dynamics.classify_user_behavior(q, chat_id=scope_id)
+        if behavior == social_dynamics.UserBehaviorType.PLAYFUL:
+            emotion = "خنده"
+        else:
+            q_low = q.lower()
+            if any(w in q_low for w in ("ناراحتم", "غمگین", "دلم گرفته", "داغونم", "افسرده", "تنهام", "بغض")):
+                emotion = "غم"
+            elif any(w in q_low for w in ("عاشقتم", "دوستت دارم", "❤️", "😍", "🥰")):
+                emotion = "عشق"
+            elif any(w in q_low for w in ("تبریک", "تولد", "هپی", "🎉", "🎂", "خبر خوب")):
+                emotion = "شادی"
+
+        if not emotion:
+            return
+        await stickers.send_sticker(client, event.chat_id, emotion, cooldown=900)
+    except Exception:
+        pass
 
 
 # کلمه‌هایی که نشان می‌دهند پیام یک «دستور ابزار» است (نه سوال ساده) و باید به ایجنت برود
@@ -2575,6 +2644,17 @@ async def on_outgoing(event):
             await _safe_edit_or_send(event, status, result)
             return
 
+        # ایده‌پردازی / طوفان فکری (اسکیل ایده‌پردازی قوی — مسیر مستقیم و مطمئن)
+        if _is_ideation_request(question):
+            from ai_engine import skills_manager
+            await _stage(status, "💡 دارم از چند زاویه فکر می‌کنم و ایده می‌چینم...")
+            try:
+                result = await skills_manager.execute_skill("ideation", {"topic": _extract_ideation_topic(question)}, client, event)
+            except Exception as e:
+                result = f"❌ خطا در ایده‌پردازی: {logger.redact_secrets(str(e))}"
+            await _safe_edit_or_send(event, status, result)
+            return
+
         # مرتب‌سازی خودکار پوشه‌ها (مسیر مستقیم و مطمئن، مستقل از ایجنت)
         if _is_folder_sort_request(question):
             await _stage(status, "🗂 دارم کانال‌ها و گروه‌ها رو بررسی و دسته‌بندی می‌کنم...")
@@ -2662,8 +2742,7 @@ async def on_outgoing(event):
         # جستجوی وب (مسیر مستقیم، سریع و با خروجی جمینای — مستقل از ایجنت کند)
         if _is_web_question(question):
             await _stage(status, "🔍 دارم سریع جستجو می‌کنم...")
-            raw_answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem, chat_id=scope_id)
-            answer = agent.sanitize_tainted_output(raw_answer)
+            answer = await asyncio.to_thread(ai.ask_web_reliable, question, context, mem, chat_id=scope_id)
             if _wants_voice_reply(question) and await _send_voice_answer(event, status, answer, remember=False):
                 _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
                 return
@@ -2691,6 +2770,7 @@ async def on_outgoing(event):
                 await _safe_edit_or_send(event, status, answer)
             memory.remember_exchange(scope_id, question, answer)
             asyncio.create_task(_trigger_learn(question, answer, scope_id, event.chat_id))
+            await _maybe_send_emotional_sticker(event, client, scope_id, question)
             _log_voice_mode_reply(from_voice_mode, voice_reply_t0)
             return
 
