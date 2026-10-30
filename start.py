@@ -142,11 +142,42 @@ def run_login():
     input("\nPress Enter to return to main menu...")
 
 
+def bot_running() -> bool:
+    """Check whether an instance of the bot is currently running via bot.lock."""
+    lock_path = os.path.join(BASE_DIR, "bot.lock")
+    if not os.path.exists(lock_path):
+        return False
+    try:
+        with open(lock_path, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip() or "0")
+    except Exception:
+        return False
+    if not pid:
+        return False
+    try:
+        if os.name == "nt":
+            res = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return str(pid) in res.stdout
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
 def run_bot():
     print("\n🚀 Starting Capri Telegram AI Userbot...")
     py_exe = get_python_exe()
     bot_script = os.path.join(BASE_DIR, "bot.py")
     ensure_dependencies()
+
+    if bot_running():
+        print("\n⚠️ ربات از قبل در حال اجراست! نیازی به اجرای مجدد نیست.")
+        print("   برای اجرای مجدد، اول ربات فعلی رو با Ctrl+C ببند و بعد دوباره گزینه ۱ رو بزن.")
+        input("\nPress Enter to return to main menu...")
+        return
 
     try:
         res = subprocess.run([py_exe, bot_script], cwd=BASE_DIR)

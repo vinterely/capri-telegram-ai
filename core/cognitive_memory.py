@@ -24,6 +24,9 @@ DEFAULT_MODEL = {
     "key_facts": [
         "کاربر ترجیح می‌دهد کاپری به عنوان دستیار هوشمند تلگرام پاسخ‌های دقیق، خودمانی و بدون مقدمه‌چینی بدهد",
     ],
+    "self_model": [
+        "مالک ترجیح می‌دهد کاپری دستیار دقیق، خودمانی و بدون مقدمه‌چینی باشد",
+    ],
     "social_context": {
         "important_topics": []
     },
@@ -61,6 +64,7 @@ def get_context_summary() -> str:
     data = _load()
     prof = data.get("user_profile", {})
     facts = data.get("key_facts", [])
+    self_notes = data.get("self_model", [])
 
     lines = []
     lines.append(f"نام کاربر: {prof.get('name', 'کاربر')}")
@@ -74,6 +78,10 @@ def get_context_summary() -> str:
         lines.append("نکات و حقایق کلیدی تثبیت‌شده:")
         for f in facts[-8:]:
             lines.append(f"  • {f}")
+    if self_notes:
+        lines.append("شناخت کاپری از خودش (درخواست‌ها و ترجیحات رفتاری مالک دربارهٔ تو — حتماً رعایت کن):")
+        for s in self_notes[-10:]:
+            lines.append(f"  • {s}")
 
     return "\n".join(lines)
 
@@ -89,7 +97,7 @@ def _clean_json_str(s: str) -> str:
     return s.strip()
 
 
-async def reflect_interaction(user_msg: str, bot_response: str) -> None:
+async def reflect_interaction(user_msg: str, bot_response: str, scope_id: Optional[Any] = None) -> None:
     """
     حلقه تأمل شناختی در پس‌زمینه (Autonomous Reflection):
     پیام اخیر کاربر و پاسخ دستیار را بررسی می‌کند و بدون ایجاد وقفه در عملکرد ربات،
@@ -109,20 +117,24 @@ async def reflect_interaction(user_msg: str, bot_response: str) -> None:
 
     prompt = (
         "تو ناظر شناختی هوش مصنوعی کاپری (Capri Cognitive Engine) هستی.\n"
-        "تعامل اخیر بین کاربر تلگرام و کاپری را بررسی کن و الگوهای جدید، علایق، ترجیحات و حقایق پنهان را کشف کن:\n\n"
+        "تعامل اخیر بین کاربر تلگرام و کاپری را بررسی کن و به‌جای ذخیرهٔ متن خام، الگوهای ماندگار را کشف و تقطیر کن:\n\n"
         f"پیام کاربر: «{user_msg}»\n"
         f"پاسخ دستیار: «{bot_response[:300]}»\n\n"
         f"شناخت فعلی:\n"
         f"- علایق: {current_prof.get('interests', [])}\n"
         f"- عادات: {current_prof.get('habits', [])}\n"
         f"- حقایق کلیدی: {current_facts[-5:]}\n\n"
-        "وظیفه تو تأمل (Reflection) است. اگر نکته یا واقعیت ماندگار و جدیدی از کاربر کشف شد که ارزش ثبت دارد، فقط یک آبجکت JSON معتبر به این فرمت برگردان:\n"
+        "وظیفهٔ تو تأمل (Reflection) است. اگر نکتهٔ ماندگار و جدیدی کشف شد که ارزش ثبت دارد، فقط یک آبجکت JSON معتبر به این فرمت برگردان:\n"
         "{\n"
-        '  "new_facts": ["واقعیت جدید یا خالی"],\n'
-        '  "new_interests": ["علاقه جدید یا خالی"],\n'
-        '  "new_habits": ["عادت یا ترجیح جدید یا خالی"]\n'
+        '  "new_facts": ["واقعیت جدید دربارهٔ کاربر یا خالی"],\n'
+        '  "new_interests": ["علاقهٔ جدید یا خالی"],\n'
+        '  "new_habits": ["عادت یا ترجیح جدید یا خالی"],\n'
+        '  "self_notes": ["درخواست یا ترجیح رفتاری که کاربر دربارهٔ خودِ کاپری گفته (مثلاً شوخ‌تر باش، کوتاه جواب بده، با فلانی این‌جور رفتار کن) یا خالی"]\n'
         "}\n"
-        "اگر نکته جدید یا مهمی وجود نداشت، آرایه‌ها را خالی بگذار. فقط و فقط کد JSON برگردان بدون هیچ توضیح اضافه."
+        "قوانین:\n"
+        "- هر آیتم باید یک جملهٔ کوتاهِ تقطیرشده باشد، نه کپی متن خام کاربر.\n"
+        "- اگر پیام احوالپرسی یا سؤال عمومی بود و نکتهٔ ماندگاری نداشت، همهٔ آرایه‌ها را خالی بگذار.\n"
+        "- فقط و فقط کد JSON برگردان بدون هیچ توضیح اضافه."
     )
 
     try:
@@ -142,7 +154,7 @@ async def reflect_interaction(user_msg: str, bot_response: str) -> None:
                 updated = True
                 try:
                     from core import memory
-                    memory.add_memory(nf)
+                    memory.add_memory(nf, scope_id=scope_id)
                 except Exception:
                     pass
 
@@ -162,15 +174,25 @@ async def reflect_interaction(user_msg: str, bot_response: str) -> None:
                 habits.append(nh)
                 updated = True
 
+        new_self = parsed.get("self_notes") or []
+        self_notes = data.setdefault("self_model", [])
+        for sn in new_self:
+            sn = str(sn).strip()
+            if sn and sn not in self_notes and len(sn) > 4:
+                self_notes.append(sn)
+                updated = True
+
         if updated:
             data["key_facts"] = current_facts[-100:]  # نگهداری ۱۰۰ حقیقت مهم
             data["user_profile"] = current_prof
+            data["self_model"] = self_notes[-30:]  # نگهداری ۳۰ یادداشت خودشناسی
             # ثبت در تاریخچه تاملات
             history = data.setdefault("reflection_history", [])
             history.append({
                 "trigger": user_msg[:100],
                 "added_facts": new_facts,
-                "added_interests": new_interests
+                "added_interests": new_interests,
+                "added_self_notes": new_self
             })
             data["reflection_history"] = history[-50:]
             _save(data)

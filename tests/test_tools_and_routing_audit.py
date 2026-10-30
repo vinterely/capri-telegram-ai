@@ -294,6 +294,31 @@ class TestConversationalQuestionsBypassTools(unittest.TestCase):
         self.assertFalse(bot._is_simple_question(q_rem))
 
 
+class TestSendMessageRequestRouting(unittest.TestCase):
+    """درخواست «به کسی پیام بده/بگو» باید به ایجنت برود تا ابزار Ghostwriter اجرا شود."""
+
+    def test_send_message_requests_route_to_agent(self):
+        cases = (
+            "کاپری به ali پیام بده بگو دیر میام",
+            "به علی پیام بده بگو دیر میام",
+            "به مامانم پیام بده بگو دیر میام",
+            "پیام بده به علی",
+            "به علی بگو دیر میام",
+            "بگو به علی که جلسه کنسل شد",
+        )
+        for q in cases:
+            self.assertFalse(bot._is_simple_question(q), f"Should route to agent: {q}")
+
+    def test_self_addressed_talk_stays_simple(self):
+        cases = (
+            "یک پیام الهام‌بخش بگو",
+            "به من بگو یک جوک",
+            "به کاپری بگو سلام برسون",
+        )
+        for q in cases:
+            self.assertTrue(bot._is_simple_question(q), f"Should stay simple: {q}")
+
+
 class TestConcurrencyAndIsolationSafety(unittest.IsolatedAsyncioTestCase):
     """Test that concurrent requests run safely with isolated states and no taint leaks."""
 

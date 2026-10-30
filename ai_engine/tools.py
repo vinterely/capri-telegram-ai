@@ -329,7 +329,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "draft_and_send_message",
-            "description": "تنظیم پیش‌نویس پیام و ارسال به مخاطب در تلگرام پس از تأیید (Ghostwriter).",
+            "description": "تنظیم پیش‌نویس پیام و ارسال به مخاطب در تلگرام پس از تأیید (Ghostwriter). هر وقت مالک گفت «به فلانی پیام بده» یا «به فلانی بگو ...» از این ابزار استفاده کن.",
             "parameters": {
                 "type": "object",
                 "properties": {

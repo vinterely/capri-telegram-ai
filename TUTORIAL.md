@@ -1,6 +1,6 @@
-# 📘 Capri AI Userbot [v3.1.0] - Comprehensive Setup Tutorial
+# 📘 Capri AI Userbot [v3.2.0] - Comprehensive Setup Tutorial
 
-Welcome to the definitive setup tutorial for **Capri (v3.1.0)**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
+Welcome to the definitive setup tutorial for **Capri (v3.2.0)**, an autonomous Telegram AI userbot powered by Telethon and multi-provider ReAct agent intelligence.
 
 This tutorial guides you from a blank machine to a fully running, production-ready Capri userbot in under 5 minutes.
 
@@ -15,7 +15,7 @@ This tutorial guides you from a blank machine to a fully running, production-rea
 6. [🧙 Method 3: The Interactive Python Wizard (start.py)](#6--method-3-the-interactive-python-wizard-startpy)
 7. [🐳 Method 4: Docker Deployment (Recommended for Servers/VPS)](#7--method-4-docker-deployment-recommended-for-serversvps)
 8. [🛠️ Method 5: Manual Terminal Setup](#8-️-method-5-manual-terminal-setup)
-9. [Step 4: Testing Key Commands & Features (v3.1.0)](#9-step-4-testing-key-commands--features-v310)
+9. [Step 4: Testing Key Commands & Features (v3.2.0)](#9-step-4-testing-key-commands--features-v310)
 10. [Step 5: Production 24/7 Daemon Execution](#10-step-5-production-247-daemon-execution)
 11. [Troubleshooting & FAQ](#11-troubleshooting--faq)
 
@@ -200,11 +200,30 @@ python bot.py
 
 ---
 
-## 9. Step 4: Testing Key Commands & Features (v3.1.0)
+## 9. Step 4: Testing Key Commands & Features (v3.2.0)
 
 Open Telegram and test Capri in **Saved Messages**, in **Capri Home**, or in any chat:
 
-### 1. 💡 Structured Ideation & Brainstorming (v3.1.0)
+### 1. 🎙️ Gemini Live Bidirectional Voice Mode (v3.2.0)
+- `کاپری وارد گفتگو صوتی شو` / `کاپری باهام صوتی حرف بزن`:
+  - Enters real-time bidirectional voice conversation powered directly by `gemini-2.5-flash-native-audio-latest`.
+  - Talk directly via voice notes: Capri listens, reasons, and responds back directly in native audio without STT/TTS latency or intermediate transcription artifacts.
+- `خروج از گفتگو صوتی` / `قطع گفتگوی صوتی`:
+  - Exits Live Voice mode and returns to standard multi-modal interaction.
+
+### 2. 🧠 Cognitive Self-Model & Behavioral Tuning (v3.2.0)
+- Guide Capri's behavior naturally:
+  - `بیشتر شوخ‌طبع باش`
+  - `کوتاه‌تر و سریع جواب بده`
+  - `توی چت با من صمیمی‌تر باش`
+- Capri distills feedback into its persistent `self_model` profile (`cognitive_memory.json`), adapting its persona organically without altering core system files.
+
+### 3. ✍️ Intelligent Ghostwriter Delegation (v3.2.0)
+- `به علی پیام بده بگو فردا ساعت ۱۰ می‌رسم`:
+  - Capri recognizes delegation intent and routes directly to the secure `draft_and_send_message` pipeline.
+  - Resolves target recipient, presents confirmation, and sends the drafted communication cleanly.
+
+### 4. 💡 Structured Ideation & Brainstorming
 - `کاپری یه ایده بده برای ساخت یک محصول جدید` / `کاپری طوفان فکری کن روی [موضوع]`
 - Capri runs a fast-path structured brainstorming workflow:
   - Validates core assumptions and target goals.
@@ -212,12 +231,12 @@ Open Telegram and test Capri in **Saved Messages**, in **Capri Home**, or in any
   - Delivers low-friction quick wins and bold high-risk/high-reward paths.
   - Asks 1–2 sharpening questions to refine the project.
 
-### 2. 🎀 Emotional Stickers from Vinterely Pack (v3.1.0)
+### 2. 🎀 Emotional Stickers from Vinterely Pack (v3.2.0)
 - During conversations with high emotional resonance (jokes, celebration, empathy, surprise), Capri contextually responds with matching stickers from the `Vinterely` pack.
 - Enforces an automatic 15-minute per-chat cooldown to ensure stickers remain delightful rather than spammy.
 - The ReAct agent can also invoke the `send_sticker(emotion)` tool autonomously.
 
-### 3. 🗓️ Synchronized Solar Hijri & Gregorian Date Awareness (v3.1.0)
+### 3. 🗓️ Synchronized Solar Hijri & Gregorian Date Awareness (v3.2.0)
 - `امروز چه روزیه؟` / `تاریخ امروز چیه؟`
 - Returns accurate, synchronized date context:
   - Solar Hijri (Jalali) date + Persian weekday.
@@ -336,5 +355,9 @@ Start-Process -NoNewWindow -FilePath ".\venv\Scripts\python.exe" -ArgumentList "
 ### Q4: Are messages safely backed up before deletion?
 - **Guarantee:** Capri's cleaner enforces an uncompromising safety rule: zero messages are deleted without confirmed pre-deletion forwarding to the Capri Home `🗂 بکاپ` topic. If forwarding fails for any reason, the original message remains intact.
 
-### Q5: How do I change the default sticker pack?
+### Q5: "Another instance of Capri is already running" or `bot.lock` warning
+- **Cause:** Capri enforces an OS-level file lock (`bot.lock`) to prevent dual processes from corrupting Telegram SQLite databases.
+- **Solution:** Check your running processes or background terminal tabs. Kill any previous `python bot.py` instances. If the process crashed abruptly, simply remove the stale `bot.lock` file and restart.
+
+### Q6: How do I change the default sticker pack?
 - **Solution:** In `.env`, set `STICKER_PACK_SHORTNAME=YourPackName`. Capri will fetch the new pack and cache the emotion mappings upon the next startup.

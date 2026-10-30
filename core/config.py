@@ -27,6 +27,11 @@ GEMINI_API_KEYS = list(dict.fromkeys([k for k in (GEMINI_API_KEY, GEMINI_API_KEY
 GEMINI_VIDEO_API_KEY = os.getenv("GEMINI_VIDEO_API_KEY", "").strip() or GEMINI_API_KEY
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 GEMINI_MODELS = [m.strip() for m in GEMINI_MODEL.split(",") if m.strip()]
+GEMINI_LIVE_MODEL = os.getenv(
+    "GEMINI_LIVE_MODEL",
+    "gemini-2.5-flash-native-audio-latest,gemini-3.1-flash-live-preview,gemini-3.8-live",
+).strip()
+GEMINI_LIVE_MODELS = [m.strip() for m in GEMINI_LIVE_MODEL.split(",") if m.strip()]
 ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "کاپری,capri").strip()
 ASSISTANT_NAMES = [n.strip() for n in ASSISTANT_NAME.split(",") if n.strip()]
 OWNER_NAME = os.getenv("OWNER_NAME", "Owner").strip()

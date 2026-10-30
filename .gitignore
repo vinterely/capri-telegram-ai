@@ -29,3 +29,5 @@ custom_skills/
 
 # Logs & temp
 *.log
+bot.lock
+*.lock

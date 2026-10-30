@@ -194,6 +194,30 @@ class TestAbsenceDetection(unittest.TestCase):
         self.assertFalse(dnd.is_dnd_deactivate_command("حالم خوبه"))
         self.assertFalse(dnd.is_dnd_deactivate_command("برگشتن به خونه چقدر طول کشید؟"))
 
+    def test_deactivate_not_triggered_by_contained_word(self):
+        # «رسیدم» نباید داخل «پرسیدم/نرسیدم/میرسیدم» مچ شود (تداخل دستور)
+        for t in (
+            "سوال پرسیدم",
+            "از این به بعد سوال پرسیدم بگو باشه",
+            "هنوز نرسیدم خونه",
+            "میرسیدم اگه زودتر راه می‌افتادم",
+        ):
+            self.assertFalse(dnd.is_dnd_deactivate_command(t), f"should NOT deactivate: {t!r}")
+        # اما «رسیدم» به‌تنهایی همچنان برگشت واقعی است
+        self.assertTrue(dnd.is_dnd_deactivate_command("الان رسیدم خونه"))
+
+    def test_activate_not_triggered_by_contained_word(self):
+        # «کلاسم» نباید داخل «کلاسمون» مچ شود و DND را اشتباهاً فعال کند
+        for t in (
+            "کلاسمون ساعت ۵ تموم میشه",
+            "دانشگاهمون امروز تعطیله",
+            "سر کارمون شلوغ بود امروز",
+        ):
+            self.assertFalse(dnd.is_dnd_command(t), f"should NOT activate DND: {t!r}")
+        # اما اعلام واقعی مشغله همچنان فعال می‌شود
+        self.assertTrue(dnd.is_dnd_command("کلاسم تا ساعت ۵، جواب نده"))
+        self.assertTrue(dnd.is_dnd_command("درگیرم، تا ساعت ۳ جواب نده"))
+
 
 # -----------------------------------------------------------------------------
 # ۵. تجزیهٔ زمان (نسبی/مطلق) برای غیبت و یادآور

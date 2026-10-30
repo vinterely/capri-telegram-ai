@@ -636,9 +636,14 @@ def is_status_command(text: str) -> bool:
     return any(w in t for w in ("وضعیت سرشلوغ", "وضعیت dnd", "حالت dnd فعال هست", "سرشلوغ فعاله", "وضعیت ربات", "وضعیت سیستم", "وضعیت کاپری", "آمار کاپری", "استاتوس"))
 
 
+def _has_phrase(text: str, phrase: str) -> bool:
+    """تطبیق عبارت با مرز کلمه؛ جلوگیری از تداخل مثل «پرسیدم» با «رسیدم» یا «کلاسمون» با «کلاسم»."""
+    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
+
+
 def is_dnd_deactivate_command(text: str) -> bool:
     t = (text or "").strip().lower()
-    return any(w in t for w in (
+    return any(_has_phrase(t, w) for w in (
         "بیدار شدم", "آزاد شدم", "سرشلوغ رو خاموش", "سرشلوغ رو ببند",
         "dnd رو خاموش", "dnd رو ببند", "خاموش کردن dnd", "سرشلوغی رو بردار", "پایان dnd",
         "برگشتم", "برگشتیم", "اومدم", "آمدم", "رسیدم", "حالم بهتره", "خوابم تموم شد"
@@ -724,7 +729,7 @@ def is_dnd_command(text: str) -> bool:
     if any(q in t for q in ("چرا", "چطور", "چطوری", "چگونه", "آیا", "چیه")):
         return False
 
-    has_activity = any(w in t for w in (
+    has_activity = any(_has_phrase(t, w) for w in (
         "درگیرم", "بدرگیرم", "می‌درگیرم", "میدرگیرم", "استراحتم", "کلاسم", "سر کلاسم", "کلاس دارم",
         "دانشگاهم", "سر کارم", "کار دارم", "جلسه‌ام", "جلسه دارم", "درس دارم", "درس می‌خونم",
         "درس میخونم", "امتحان دارم", "باشگاهم", "بیرونم", "رانندگی‌ام", "مزاحم نشید", "مزاحمم نشید",

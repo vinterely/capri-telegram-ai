@@ -803,11 +803,13 @@ class ConversationBuffer:
             recent_lines = []
             token_count = _estimate_tokens(summary)
 
+            bot_name = config.ASSISTANT_NAMES[0] if getattr(config, "ASSISTANT_NAMES", None) else "کاپری"
+            owner_name = getattr(config, "OWNER_NAME", "") or "صاحب اکانت"
+
             for entry in reversed(hist):
                 u_text = entry.get("user", "")
                 b_text = entry.get("bot", "")
-                bot_name = config.ASSISTANT_NAMES[0] if getattr(config, "ASSISTANT_NAMES", None) else "کاپری"
-                turn_str = f"کاربر: {u_text}\n{bot_name}: {b_text}"
+                turn_str = f"{owner_name} (صاحب اکانت): {u_text}\n{bot_name}: {b_text}"
                 turn_tokens = _estimate_tokens(turn_str)
                 if token_count + turn_tokens > max_tokens and recent_lines:
                     break

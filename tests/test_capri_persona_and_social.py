@@ -85,7 +85,7 @@ class TestCapriPersonaAndSocialDynamics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state, BehavioralState.SERIOUS)
 
         modifier = social_dynamics.get_behavioral_prompt_modifier(msg, chat_id="998877")
-        self.assertIn("جدی", modifier)
+        self.assertIn("بدون محدودیت لفظی", modifier)
         self.assertIn("مطلقا تکرار نکن «ناراحت شدم»", modifier)
 
         # ثبت رویداد مشخص در حافظه
@@ -105,8 +105,8 @@ class TestCapriPersonaAndSocialDynamics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state2, BehavioralState.BOUNDARY_SETTING)
 
         modifier = social_dynamics.get_behavioral_prompt_modifier("خیلی بیشعوری گم شو", chat_id=chat_id)
-        self.assertIn("مرزبند", modifier)
-        self.assertIn("مرز احترام", modifier)
+        self.assertIn("بدون محدودیت لفظی", modifier)
+        self.assertIn("فحش خانوادگی", modifier)
 
     # ۷. عذرخواهی پس از توهین و ترمیم رابطه
     def test_07_apology_repairs_interaction(self):
@@ -184,10 +184,13 @@ class TestCapriPersonaAndSocialDynamics(unittest.IsolatedAsyncioTestCase):
         self.assertIn("دختر", ai.SYSTEM_PROMPT)
         self.assertIn("دوست‌داشتنی", ai.SYSTEM_PROMPT)
 
-        # اطمینان از پاکسازی کامل فحش و الفاظ رکیک قبلی
-        self.assertNotIn("استفاده از فحش", ai.SYSTEM_PROMPT)
+        # قانون فحش متقابل (بدون محدودیت لفظی) با تنها مرزِ «فحش خانوادگی ممنوع» در هر دو پرامپت
+        self.assertIn("بدون هیچ محدودیت لفظی", ai.SYSTEM_PROMPT)
+        self.assertIn("فحش خانوادگی", ai.SYSTEM_PROMPT)
+        self.assertIn("بدون هیچ محدودیت لفظی", prompts.AGENT_SYSTEM)
+        self.assertIn("فحش خانوادگی", prompts.AGENT_SYSTEM)
+        # همچنان پاک از عبارات قدیمی حذف‌شده
         self.assertNotIn("الفاظ رکیک", ai.SYSTEM_PROMPT)
-        self.assertNotIn("کیر", ai.SYSTEM_PROMPT)
         self.assertNotIn("گه خوردی", ai.SYSTEM_PROMPT)
 
     # ۱۳. حفظ عملکرد ابزارها و چرخه ReAct همراه با شخصیت جدید

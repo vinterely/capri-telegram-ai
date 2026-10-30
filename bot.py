@@ -28,6 +28,7 @@ from services.telegram import cleaner
 from services.telegram import channel_summary
 from services.social import ghost
 from services.social import dnd
+from services.social import insult_reply
 from services.search import gsearch
 from core import memory
 from ai_engine import models
@@ -37,6 +38,7 @@ from core import settings
 from services.study import study
 from ai_engine import tools
 from services.voice import voice
+from services.voice import live as live_voice
 from services.media import ytsummary
 from core import cognitive_memory
 from services.social import drafter
@@ -378,6 +380,29 @@ async def get_reply_info(event, client=None) -> Optional[dict]:
     }
 
 
+def _recent_author_label(msg, owner_id) -> str:
+    """Precise label for recent message authors: real name + numeric ID + role (owner/user)."""
+    sid = getattr(msg, "sender_id", None)
+    name = ""
+    try:
+        s_obj = getattr(msg, "sender", None)
+        if s_obj is not None:
+            name = (getattr(s_obj, "first_name", "") or getattr(s_obj, "title", "") or "").strip()
+    except Exception:
+        name = ""
+    is_owner = bool(getattr(msg, "out", False)) or (
+        bool(owner_id) and sid is not None and int(sid) == int(owner_id)
+    )
+    if is_owner:
+        name = name or (getattr(config, "OWNER_NAME", "") or "صاحب اکانت")
+        role = "صاحب اکانت"
+    else:
+        name = name or "کاربر"
+        role = "کاربر"
+    id_txt = f"ID: {sid}" if sid is not None else "ID نامشخص"
+    return f"{name} ({role}, {id_txt})"
+
+
 async def get_context(event) -> str:
     """Build situational context for the request, including chat environment, sender identity, and reply context."""
     cli = globals().get("client")
@@ -464,19 +489,8 @@ async def get_context(event) -> str:
                 if clean_text in seen:
                     continue
                 seen.add(clean_text)
-                if is_grp:
-                    s_name = "کاربر"
-                    try:
-                        s_obj = getattr(m, "sender", None)
-                        if s_obj:
-                            s_name = getattr(s_obj, "first_name", "") or "کاربر"
-                    except Exception:
-                        pass
-                    m_sid = getattr(m, "sender_id", "نامشخص")
-                    history_lines.append(f"{s_name} (ID: {m_sid}): {clean_text}")
-                else:
-                    who = "کاربر" if getattr(m, "out", False) else "دیگران"
-                    history_lines.append(f"{who}: {clean_text}")
+                label = _recent_author_label(m, owner_id)
+                history_lines.append(f"{label}: {clean_text}")
     except Exception:
         pass
 
@@ -817,15 +831,12 @@ def _learn(question: str, answer: str, scope_id: Optional[str] = None, chat_id: 
 
 _last_learn_time = 0.0
 _learn_lock = asyncio.Lock()
-_PERSONAL_MARKERS = ("من ", " من", "دوست دارم", "علاقه", "ترجیح", "کارم", "شغلم", "اسمم", "سنم", "یادم", "همیشه", "بلدم", "بدم میاد", "عاشق")
 
 
 async def _trigger_learn(question: str, answer: str, scope_id: Optional[str] = None, chat_id: Optional[Any] = None) -> None:
     global _last_learn_time
     q = (question or "").strip()
-    if len(q) < 15:
-        return
-    if not any(m in q for m in _PERSONAL_MARKERS):
+    if len(q) < 4:
         return
     now = time.time()
     if now - _last_learn_time < 30.0:
@@ -839,9 +850,9 @@ async def _trigger_learn(question: str, answer: str, scope_id: Optional[str] = N
         except Exception as e:
             log.debug("Fact learning exception: %s", e)
         try:
-            # تأمل شناختی خودکار منحصراً در گفتگوهای خصوصی یا سیو مسیج
+            # تأمل شناختی خودکار (ایجنتی) منحصراً در گفتگوهای خصوصی یا سیو مسیج
             if not scope_id or ":group:" not in str(scope_id):
-                await cognitive_memory.reflect_interaction(question, answer)
+                await cognitive_memory.reflect_interaction(question, answer, scope_id=scope_id)
         except Exception as e:
             log.debug("Cognitive reflection exception: %s", e)
 
@@ -1370,7 +1381,7 @@ def _extract_ideation_topic(q: str) -> str:
     return " ".join(q.split()).strip("،,:.؟?! «»\"' ")
 
 
-_IMAGE_QUERY_WORDS = ("سعکس", "تصویر", "پوستر")
+_IMAGE_QUERY_WORDS = ("عکس", "تصویر", "پوستر")
 _IMAGE_ACTION_WORDS = (
     "نشونم بده", "نشون بده", "نشان بده", "پیداش کن", "پیدا کن", "بفرستش",
     "بفرست", "بده", "بذار", "بزار", "بگرد", "میخوام", "میخام", "لطفا", "لطفاً",
@@ -1492,6 +1503,30 @@ def _is_download_request(text: str) -> bool:
     ))
 
 
+# مخاطب‌هایی که «به X بگو» خطاب به خودِ دستیار است، نه ارسال پیام به یک نفر دیگر
+_SELF_ADDRESS_WORDS = (
+    "من", "خودم", "خودمون", "خودمان", "خودت", "تو", "شما", "کاپری", "capri", "همه", "هممون",
+)
+_SEND_TARGET_RE = re.compile(
+    r"(?:^|\s)(?:به\s+([^\s،,.!؟?:؛«»()]+)\s+بگو|بگو\s+به\s+([^\s،,.!؟?:؛«»()]+))"
+)
+
+
+def _is_send_message_request(q: str) -> bool:
+    """درخواست فرستادن پیام به یک مخاطب دیگر (باید به ایجنت و ابزار Ghostwriter برسد، نه پاسخ سریع)."""
+    q = (q or "").strip()
+    if not q:
+        return False
+    if re.search(r"پیام\s*(?:بده|بدی|بفرست|بفرستی|بزن)\b", q):
+        return True
+    m = _SEND_TARGET_RE.search(q)
+    if m:
+        target = (m.group(1) or m.group(2) or "").lower()
+        if target and target not in _SELF_ADDRESS_WORDS:
+            return True
+    return False
+
+
 def _is_simple_question(q: str) -> bool:
     """سوال ساده/گفتگویی (بدون ابزار) که می‌شود مستقیم و سریع جواب داد."""
     q = q or ""
@@ -1499,6 +1534,8 @@ def _is_simple_question(q: str) -> bool:
     if re.search(r"(?:youtube\.com|youtu\.be|instagram\.com|tiktok\.com|twitter\.com|x\.com|pin\.it|pinterest\.com|soundcloud\.com)", q, re.I):
         return False
     if any(w in q for w in _TOOL_TRIGGER_WORDS):
+        return False
+    if _is_send_message_request(q):
         return False
     for dw in _DISCRETE_TRIGGER_WORDS:
         if re.search(r"(?:^|[^\w\u0600-\u06FF])" + re.escape(dw) + r"(?:[^\w\u0600-\u06FF]|$)", q):
@@ -1533,6 +1570,49 @@ async def _media_target(event):
         except Exception:
             return None
     return None
+
+
+async def _handle_live_voice(event) -> None:
+    """ویس مالک در حالت «گفتگوی صوتی زنده»: پاسخ صوتی بومی از Gemini Live (بدون STT/TTS جداگانه)."""
+    path = os.path.join(config.DOWNLOAD_DIR, f"live_in_{int(time.time() * 1000)}.ogg")
+    status = None
+    reply_ogg = None
+    try:
+        os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
+        status = await event.reply("🎙️ دارم گوش می‌دم...")
+        self_sent.add(status.id)
+        ops.register(str(event.chat_id), asyncio.current_task(), status)
+        await client.download_media(event.message, file=path)
+        await _stage(status, "🎙️ دارم فکر می‌کنم و جواب صوتی می‌سازم...")
+        t0 = time.time()
+        reply_ogg, reply_text, err = await live_voice.respond(event.chat_id, path)
+        log.info("Live voice turn: %.2fs", time.time() - t0)
+        caption = (reply_text or "").strip()
+        if len(caption) > 900:
+            caption = caption[:900] + "…"
+        sent = False
+        if reply_ogg:
+            try:
+                await client.send_file(event.chat_id, reply_ogg, voice_note=True, caption=caption or None, parse_mode=None)
+                sent = True
+            except Exception:
+                log.warning("Live voice send_file failed", exc_info=True)
+        if sent:
+            try:
+                await status.delete()
+            except Exception:
+                pass
+        elif caption:
+            await _stage(status, caption)
+        else:
+            await _stage(status, f"❌ {err or 'پاسخ صوتی دریافت نشد؛ دوباره ویس بفرست.'}")
+    except Exception as e:
+        log.error("Live voice failed: %s", type(e).__name__, exc_info=True)
+        await _stage(status, "❌ گفتگوی صوتی این نوبت انجام نشد؛ دوباره ویس بفرست.")
+    finally:
+        _safe_unlink(path)
+        if reply_ogg:
+            _safe_unlink(reply_ogg)
 
 
 async def _handle_voice(event, status, msg, question) -> None:
@@ -1654,6 +1734,7 @@ async def _handle_vision(event, status, msg, question) -> None:
     path = os.path.join(config.DOWNLOAD_DIR, f"img_{int(time.time())}.jpg")
     try:
         os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
+
         await _stage(status, "👁 دارم عکس رو می‌بینم...")
         await client.download_media(msg, file=path)
         q = question
@@ -2356,6 +2437,11 @@ async def on_outgoing(event):
             await event.reply(f"✖️ ارسال پیام به «{draft['name']}» لغو شد.")
             return
 
+    # Live Voice: در حالت «گفتگوی صوتی»، ویس مالک مستقیم به مدل صوتی بومی می‌رود (بدون STT/TTS)
+    if not text and _is_voice_note(event.message) and live_voice.is_active(event.chat_id):
+        await _handle_live_voice(event)
+        return
+
     # Voice Mode: ویس مالک بدون تریگر، STT و سپس وارد همان موتور اصلی هوش مصنوعی می‌شود
     from_voice_mode = False
     if not text and settings.get_voice_mode() and _is_voice_note(event.message):
@@ -2389,6 +2475,12 @@ async def on_outgoing(event):
 
     question = strip_trigger(text) if has_trigger else text
     voice_reply_t0 = time.time() if from_voice_mode else 0.0
+
+    # Deterministic and immediate reply for severe abusive terms
+    _insult = insult_reply.match_insult(question)
+    if _insult:
+        await event.reply(_insult)
+        return
 
     # دستور لغو عملیات در حال اجرا (فقط مالک، چون پیام خروجی است)
     if is_cancel_command(question):
@@ -2509,6 +2601,29 @@ async def on_outgoing(event):
 
         # حالت رول‌پلی (راوی تعاملی): شروع/پایان/نگه‌داشتن/ادامه + تمام پیام‌های حین بازی
         if await roleplay.handle(event, status, question, client):
+            return
+
+        # ۰. گفتگوی صوتی زنده (Gemini Live): ورود/خروج — فقط مالک، چون پیام خروجی است
+        lv_cmd = live_voice.parse_command(question)
+        if lv_cmd == "on":
+            if live_voice.is_active(event.chat_id):
+                await status.edit("🎙️ گفتگوی صوتی از قبل فعاله؛ ویس بفرست. برای پایان بگو «خروج از گفتگو صوتی».")
+            else:
+                live_voice.activate(event.chat_id)
+                await status.edit(
+                    "🎙️ **گفتگوی صوتی زنده فعال شد.**\n\n"
+                    "از الان هر ویسی بفرستی، مستقیم به مدل صوتی بومی Gemini می‌ره و **پاسخ صوتی** می‌گیری؛ "
+                    "بدون تبدیل متن و بدون TTS جداگانه.\n\n"
+                    "• هر ویس = یک نوبت (تلگرام در چت خصوصی تماس پیوسته نمی‌دهد)، ۱۰ تا ۱۵ ثانیه تأخیر داشته باش.\n"
+                    "• فقط برای خودت (مالک) و فقط در همین چت فعال است.\n"
+                    "• برای پایان: «خروج از گفتگو صوتی»"
+                )
+            return
+        if lv_cmd == "off":
+            if live_voice.deactivate(event.chat_id):
+                await status.edit("🔇 گفتگوی صوتی بسته شد. از این به بعد ویس‌ها مثل قبل پردازش می‌شوند.")
+            else:
+                await status.edit("ℹ️ گفتگوی صوتی در این چت فعال نبود.")
             return
 
         # ۰. Voice Mode: روشن/خاموش کردن حالت ویس (پایدار در تنظیمات)
@@ -2964,6 +3079,12 @@ async def on_incoming_pm(event):
         await event.reply("سلام! بهم بگو چه کاری برات انجام بدم.")
         return
 
+    # Deterministic and immediate reply for severe abusive terms
+    _insult = insult_reply.match_insult(question)
+    if _insult:
+        await event.reply(_insult)
+        return
+
     s_name = (getattr(sender, "first_name", "") or "مخاطب").strip()
 
     # مسدودسازی دستورات ادمینی و بن/کیک اعضای گروه
@@ -3067,5 +3188,48 @@ async def main():
     await client.run_until_disconnected()
 
 
+def _acquire_bot_lock():
+    """Acquire bot process lock to prevent concurrent instances and SQLite database locking."""
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.lock")
+
+    def _pid_alive(pid):
+        if not pid:
+            return False
+        try:
+            if os.name == "nt":
+                import subprocess
+                res = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                return str(pid) in res.stdout
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+
+    if os.path.exists(lock_path):
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip() or "0")
+        except Exception:
+            old_pid = 0
+        if _pid_alive(old_pid):
+            print(f"[!] Capri already running (PID {old_pid}). Exiting to avoid session lock.", flush=True)
+            sys.exit(0)
+
+    with open(lock_path, "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
+    return lock_path
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    _lock = _acquire_bot_lock()
+    try:
+        asyncio.run(main())
+    finally:
+        try:
+            if os.path.exists(_lock):
+                os.remove(_lock)
+        except Exception:
+            pass

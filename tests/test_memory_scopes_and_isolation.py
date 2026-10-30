@@ -167,7 +167,7 @@ class TestMemoryScopesAndIsolation(unittest.TestCase):
 
         # کاربر در پیوی به کاپری بی‌ادبی می‌کند
         mod_pv = social_dynamics.get_behavioral_prompt_modifier("خیلی احمقی و هیچی بلد نیستی", "", user_pv)
-        self.assertIn("جدی، باوقار", mod_pv)
+        self.assertIn("بدون محدودیت لفظی", mod_pv)
 
         # ثبت رویداد اجتماعی در پیوی
         pv_interactions = memory.get_recent_interactions(scope_id=user_pv)
@@ -176,7 +176,7 @@ class TestMemoryScopesAndIsolation(unittest.TestCase):
         # همان کاربر اکنون در گروه پیام عادی ارسال می‌کند
         mod_group = social_dynamics.get_behavioral_prompt_modifier("سلام وقت بخیر، کسی اینجا پایتون کار می‌کنه؟", "", group)
         # در گروه نباید لحن دلخور یا سنگین اعمال شود؛ باید حالت عادی یا پرانرژی باشد
-        self.assertNotIn("جدی، باوقار", mod_group)
+        self.assertNotIn("بدون محدودیت لفظی", mod_group)
 
         # سوابق تعاملی گروه نباید رویداد منفی پیوی را نشان دهد
         grp_interactions = memory.get_recent_interactions(scope_id=group)
